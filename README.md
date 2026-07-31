@@ -49,6 +49,25 @@ Apps Script project — they are **redacted** in this repo. Never commit the rea
 values (GitHub secret scanning will block the push, and this feeds a public
 site).
 
+## Facebook tab
+
+`facebook.js` adds a **Facebook** tab that reuses the same pacing engine. It's
+fed from a **separate** Google Sheet (`FB - Daily`, campaign-level by date),
+read through the gateway's `fbData` action.
+
+- Only rows whose **`Active` column = "Active"** are served — unmanaged accounts
+  never reach the browser. The gateway also trims to the last 95 days.
+- Two levels: an **account rollup** row, expandable to **per-campaign pacing**
+  (each campaign has its own monthly budget).
+- Campaign budgets are stored in a `Facebook_Budgets` tab in the main sheet
+  (`Account · Campaign · Month · Mode · Amount`), separate from Google/Microsoft
+  budgets. A campaign's budget defaults to the sheet's **Daily budget × days in
+  month** until set, or can use **last month's spend** or a **manual** amount.
+
+To point at a different FB spreadsheet/tab, edit `FB_SPREADSHEET_ID` / `FB_TAB`
+in `Code.gs`. The gateway's Google account must have access to that spreadsheet,
+and **you must redeploy the gateway as a new version** after editing `Code.gs`.
+
 ## Config
 
 `DEFAULT_WEBAPP_URL` and `DEFAULT_SECRET` at the top of `index.html` point the

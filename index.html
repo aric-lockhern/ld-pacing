@@ -683,8 +683,9 @@ function notifHTML(){
   return '<div class="notifs">'+head+'<div class="notif-list">'+rows+'</div></div>';
 }
 function topbarHTML(){
-  var isLive=state.viewMonth===state.liveKey, inSettings=state.view==='settings';
-  var tabs='<div class="tabs"><button class="tab '+(!inSettings?'on':'')+'" data-act="tab-pacing">Pacing</button>'
+  var isLive=state.viewMonth===state.liveKey, inSettings=state.view==='settings', view=state.view;
+  var tabs='<div class="tabs"><button class="tab '+(view==='pacing'?'on':'')+'" data-act="tab-pacing">Pacing</button>'
+    + '<button class="tab '+(view==='facebook'?'on':'')+'" data-act="tab-facebook">Facebook</button>'
     + '<button class="tab '+(inSettings?'on':'')+'" data-act="tab-settings">Settings</button></div>';
   var right = inSettings ? tabs :
     ('<div class="topright"><div class="monthnav"><button class="mn-arrow" data-act="prev">‹</button>'
@@ -719,6 +720,7 @@ function saveSettings(){
 function render(){
   var html=topbarHTML();
   if(state.view==='settings'){ html+=settingsHTML(); document.getElementById('app').innerHTML=html; return; }
+  if(state.view==='facebook'){ if(window.FB){ FB.render(html); } else { html+='<div class="empty">Loading Facebook…</div>'; document.getElementById('app').innerHTML=html; } return; }
   var c=ctx(), vis=visibleAccounts(), list=sortAccounts(vis.list), t=totals(vis.list), isLive=c.isLive;
   var cellL=function(v){ return isLive?v:'—'; };
 
@@ -1384,6 +1386,7 @@ document.addEventListener('click', function(e){
   else if(act==='today'){ state.viewMonth=state.liveKey; render(); }
   else if(act==='refresh'){ loadData(); }
   else if(act==='tab-pacing'){ state.view='pacing'; render(); }
+  else if(act==='tab-facebook'){ state.view='facebook'; render(); if(window.FB) FB.load(); }
   else if(act==='tab-settings'){ state.view='settings'; render(); }
   else if(act==='save-settings'){ saveSettings(); }
   else if(act==='toggle-all'){ state.showAll=!state.showAll; render(); }
@@ -1472,5 +1475,6 @@ var SAMPLE=[
 /* go */
 loadData();
 </script>
+<script src="facebook.js"></script>
 </body>
 </html>
