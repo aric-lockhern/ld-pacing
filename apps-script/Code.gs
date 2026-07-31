@@ -48,6 +48,16 @@ var APP_URL         = 'https://pacing.lockherndigital.com';
 var MIN_DAYS_LEFT   = 1;   // no alerts on the last day — 97% then is just good pacing
 var RATE_DAYS_G     = 3;   // recent-rate window for the "trending to" line
 
+/* ---- Facebook feed (a SEPARATE spreadsheet, campaign-level by date) ----
+   The gateway runs as you, so it can read this as long as your Google
+   account has access to it. Only rows whose "Active" column = "Active" are
+   served, so unmanaged accounts never reach the browser. */
+var FB_SPREADSHEET_ID = '1ealb9ssXKqspG204VubWJvkbd77A8_jVfege3uUNS20';
+var FB_TAB            = 'FB - Daily';
+var FB_LOOKBACK_DAYS  = 95;                 // trim payload to a rolling window
+var FB_BUDGET_TAB     = 'Facebook_Budgets'; // stored in the MAIN (private) sheet
+var FB_BUDGET_HEADER  = ['Account', 'Campaign', 'Month', 'Mode', 'Amount', 'Updated'];
+
 function doGet(e) {
   var p = (e && e.parameter) || {};
   var out;
@@ -73,6 +83,10 @@ function doGet(e) {
       out = postSlack(p);
     } else if (p.action === 'slackUsers') {
       out = slackUsers(p);
+    } else if (p.action === 'fbData') {
+      out = fbData(p);
+    } else if (p.action === 'setFbBudget') {
+      out = setFbBudget(p);
     } else {
       out = { ok: true, service: 'Lockhern pacing gateway' };
     }
@@ -484,6 +498,86 @@ function normDateG(v) {
   }
   var s = String(v).trim(), m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   return m ? (m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2)) : s;
+}
+
+/* ============================================================
+   FACEBOOK
+   ============================================================ */
+// Serve Active-only Facebook rows (trimmed to a rolling window) + FB budgets.
+function fbData(p) {
+  requireSecret(p);
+  var rows = readFbRows();
+  var budgets = readTab(FB_BUDGET_TAB).map(function (r) { r.Month = normMonth(r.Month); return r; });
+  return { ok: true, rows: rows, budgets: budgets };
+}
+
+// Read the separate FB spreadsheet, keep only rows flagged Active in column M,
+// and only the last FB_LOOKBACK_DAYS. Columns are matched by header name, so
+// column order can change without breaking this.
+function readFbRows() {
+  var ss = SpreadsheetApp.openById(FB_SPREADSHEET_ID);
+  var sheet = ss.getSheetByName(FB_TAB);
+  if (!sheet) throw new Error('Facebook tab not found: "' + FB_TAB + '"');
+  var values = sheet.getDataRange().getValues();
+  if (values.length < 2) return [];
+
+  var header = values[0], idx = {};
+  for (var j = 0; j < header.length; j++) idx[String(header[j]).trim()] = j;
+  function c(name) { return idx[name] == null ? -1 : idx[name]; }
+  var iDate = c('Date'), iAcct = c('Account name'), iCamp = c('Campaign name'),
+      iTags = c('Campaign tags'), iDB = c('Daily budget'), iStatus = c('Campaign status'),
+      iCost = c('Total Cost'), iImp = c('Impressions'), iClk = c('Clicks'),
+      iWC = c('Website conversions'), iFL = c('On Facebook Leads'), iVal = c('Website conversions value'),
+      iActive = c('Active');
+  if (iActive < 0) throw new Error('Facebook sheet is missing the "Active" column');
+
+  var cd = new Date(); cd.setDate(cd.getDate() - FB_LOOKBACK_DAYS);
+  var cutoff = cd.getFullYear() + '-' + ('0' + (cd.getMonth() + 1)).slice(-2) + '-' + ('0' + cd.getDate()).slice(-2);
+
+  var out = [];
+  for (var i = 1; i < values.length; i++) {
+    var r = values[i];
+    if (String(r[iActive]).trim() !== 'Active') continue;         // managed-account gate
+    var d = normDateG(r[iDate]);
+    if (!d || d < cutoff) continue;
+    out.push({
+      d: d,
+      a: String(r[iAcct] || '').trim(),
+      c: String(r[iCamp] || '').trim(),
+      tg: iTags < 0 ? '' : String(r[iTags] || '').trim(),
+      db: iDB < 0 ? 0 : numv(r[iDB]),
+      st: iStatus < 0 ? '' : String(r[iStatus] || '').trim(),
+      cost: numv(r[iCost]), imp: numv(r[iImp]), clk: numv(r[iClk]),
+      wc: numv(r[iWC]), fl: numv(r[iFL]), val: numv(r[iVal])
+    });
+  }
+  return out;
+}
+
+// Upsert one campaign budget (Account + Campaign + Month) in the MAIN sheet.
+function setFbBudget(p) {
+  requireSecret(p);
+  var account = String(p.account || '').trim();
+  var campaign = String(p.campaign || '').trim();
+  var month = normMonth(p.month);
+  if (!account || !month) throw new Error('missing account/month');
+
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sheet = ss.getSheetByName(FB_BUDGET_TAB) || ss.insertSheet(FB_BUDGET_TAB);
+  ensureHeader(sheet, FB_BUDGET_HEADER);
+
+  var values = sheet.getDataRange().getValues();
+  var target = -1;
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0]).trim() === account && String(values[i][1]).trim() === campaign && normMonth(values[i][2]) === month) { target = i + 1; break; }
+  }
+  var mode = (p.mode === 'lastMonth' || p.mode === 'daily') ? p.mode : 'manual';
+  var row = [account, campaign, month, mode, Number(p.amount) || 0, new Date().toISOString()];
+  if (target === -1) { sheet.appendRow(row); target = sheet.getLastRow(); }
+  else sheet.getRange(target, 1, 1, row.length).setValues([row]);
+  sheet.getRange(target, 3).setNumberFormat('@');   // keep Month as text
+  sheet.getRange(target, 3).setValue(month);
+  return { ok: true, row: target };
 }
 
 /* ---- reads ---- */
