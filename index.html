@@ -267,6 +267,43 @@ table.bd tr:last-child td{border-bottom:none;}
 .foot{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:13px;font-size:12px;color:var(--faint);}
 .foot b{font-weight:700;}.foot-dot{color:var(--line);}
 @media (max-width:820px){.summary{grid-template-columns:1fr 1fr;}.stat-pace{grid-column:1 / -1;}}
+
+/* ---- mobile / responsive ---------------------------------------------------
+   The pacing tables (.grid) and Facebook tables (.fbgrid) share the same column
+   order, so one set of nth-child rules condenses both to the essentials on
+   phones: Account · MTD · Budget · Pace · expand. The rest stay one tap away in
+   the expanded row. No horizontal scrolling needed for the core view. */
+@media (max-width:640px){
+  .wrap{padding:14px 11px 30px;}
+  .topbar{gap:8px;}
+  .topcluster{gap:9px !important;}
+  .sep,.prod{display:none;}                       /* brand shrinks to "Lockhern" */
+  .tab{padding:6px 11px;}
+  .mn-label{min-width:0;font-size:14px;gap:6px;}
+  .summary{grid-template-columns:1fr 1fr;gap:8px;}
+  .stat{padding:11px 12px;}.stat-value{font-size:19px;}.pace-num{font-size:19px;}
+  .toolbar{gap:8px;}.tcount{flex-wrap:wrap;}
+  .grid,.fbgrid{grid-template-columns:1.7fr .8fr 1fr .9fr 22px !important;min-width:0 !important;gap:8px;padding:0 12px;}
+  .grid>*:nth-child(1),.grid>*:nth-child(4),.grid>*:nth-child(7),.grid>*:nth-child(8),.grid>*:nth-child(9),.grid>*:nth-child(10),.grid>*:nth-child(11){display:none !important;}
+  .fbgrid>*:nth-child(1),.fbgrid>*:nth-child(4),.fbgrid>*:nth-child(7),.fbgrid>*:nth-child(8),.fbgrid>*:nth-child(9),.fbgrid>*:nth-child(10),.fbgrid>*:nth-child(11){display:none !important;}
+  .row,.fbrow,.fbcrow{height:auto;min-height:52px;}
+  .acc-name{white-space:normal;overflow:visible;}
+  .meter{max-width:none;}
+  .budgetfield{max-width:none;margin-left:0;}.bf-in{width:100%;}
+  .editor{padding:6px 12px 16px;}
+  .fbdetail{padding:6px 12px 16px;}
+  .platforms{grid-template-columns:1fr;}
+  .charts{grid-template-columns:1fr;}
+  .modal{padding:16px 15px 14px;}
+  .foot{font-size:11px;}
+  .tscroll,.bd-wrap{-webkit-overflow-scrolling:touch;}
+}
+@media (max-width:460px){.summary{grid-template-columns:1fr;}.stat-pace{grid-column:auto;}}
+@media (max-width:360px){
+  /* very narrow: drop the budget column too — edit budgets by tapping the row */
+  .grid,.fbgrid{grid-template-columns:1.6fr .85fr .9fr 22px !important;}
+  .grid>*:nth-child(5),.fbgrid>*:nth-child(5){display:none !important;}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none !important;}.spin{animation:none;}}
 button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 </style>
