@@ -1,0 +1,20 @@
+# Netlify configuration for the Lockhern Account Pacing dashboard.
+# This is a static single-page app (one index.html) — there is no build
+# step, so Netlify just publishes the repo root as-is.
+
+[build]
+  publish = "."
+  command = ""
+
+# index.html must never be stale: the whole team reads live numbers through
+# it, and gateway/URL changes need to take effect on the next load.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
