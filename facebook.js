@@ -206,17 +206,35 @@ function campDerive(camp){
   p.budget=b; p.proj=unitProjection(camp.daily, eff); p.burn=unitBurn(view.cost, eff, camp.daily);
   return p;
 }
+// Which campaigns to show for the current view month. Hide the clutter:
+//   • 0 impressions this month  → drop (nothing ran), OR
+//   • 0 spend this month AND paused → drop (dormant paused campaign).
+// So a campaign shows only if it had impressions this month AND (it spent
+// this month OR it's still active). Active campaigns delivering this month
+// stay; paused campaigns stay only if they actually have this-month data.
+function fbIsActive(camp){ return String(camp.status||'').toUpperCase().indexOf('ACTIVE')>=0; }
+function campVisible(camp){
+  var m=aggMonth(camp.daily, state.viewMonth);
+  if(!(m.imp>0)) return false;
+  if(!(m.cost>0) && !fbIsActive(camp)) return false;
+  return true;
+}
+function acctVisibleCampaigns(acc){ return (acc.campaigns||[]).filter(campVisible); }
+
 function acctDerive(acc){
-  // account budget = sum of its campaign effective budgets
-  var eff=0, mtd=0, wc=0, fl=0, val=0;
-  acc.campaigns.forEach(function(c){
+  // account = rollup of its VISIBLE campaigns only; budget = sum of their budgets
+  var camps=acctVisibleCampaigns(acc);
+  var eff=0, mtd=0, wc=0, fl=0, val=0, mm={};
+  camps.forEach(function(c){
     var b=campGetBudget(c); eff+=campEffBudget(c,b);
     var a=aggMonth(c.daily, state.viewMonth); mtd+=a.cost; wc+=a.wc; fl+=a.fl; val+=a.val;
+    c.daily.forEach(function(p){ var d=mm[p.date]||(mm[p.date]={date:p.date,cost:0}); d.cost+=p.cost; });
   });
-  var p=unitPace(mtd, eff, acc.daily);
-  p.wc=wc; p.fl=fl; p.val=val;
+  var daily=Object.keys(mm).map(function(k){return mm[k];}).sort(byDate);
+  var p=unitPace(mtd, eff, daily);
+  p.wc=wc; p.fl=fl; p.val=val; p.nCamps=camps.length;
   p.roas = val>0 && mtd>0 ? val/mtd : null;
-  p.proj=unitProjection(acc.daily, eff); p.burn=unitBurn(mtd, eff, acc.daily);
+  p.proj=unitProjection(daily, eff); p.burn=unitBurn(mtd, eff, daily);
   return p;
 }
 
@@ -236,7 +254,7 @@ FB.render = function(baseHtml){
     document.getElementById('app').innerHTML=html; return;
   }
 
-  var accounts=(state.fbAccounts||[]).slice();
+  var accounts=(state.fbAccounts||[]).filter(function(a){ return acctVisibleCampaigns(a).length>0; });
   // summary
   var t={mtd:0,forecast:0,budget:0,proj:0};
   accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); });
@@ -256,7 +274,7 @@ FB.render = function(baseHtml){
 
   // toolbar
   html += '<div class="toolbar"><div class="tcount">Accounts <span class="badge">'+accounts.length+'</span>'
-    + '<span class="filtertag">Facebook · Active only</span></div>'
+    + '<span class="filtertag" title="Hidden: campaigns with 0 impressions this month, and paused campaigns with 0 spend this month.">Active + campaigns with data</span></div>'
     + '<div class="tactions">'
     + (isLive?('<label class="dayctl">Day <input class="dayin" id="fb-day-input" inputmode="numeric" value="'+c.elapsed+'"> of '+c.dim+' <span class="daypct">· '+Math.round(c.elapsed/c.dim*100)+'%</span></label>'):'')
     + '<span class="saveind '+state.fbSave+'" id="fb-saveind">'+fbSaveText()+'</span>'
@@ -321,12 +339,13 @@ function fbTrendTot(t,isLive){
 /* ---- account rollup row ---- */
 function acctRowHTML(a,isLive){
   var d=acctDerive(a), st=statusOf(d.pace), opn=!!state.fbOpen[a.account], cl=function(v){return isLive?v:'—';};
+  var camps=acctVisibleCampaigns(a);
   var burnDot = d.burn ? ('<span class="alertdot '+(d.burn.level==='critical'?'crit':'')+'" title="'+esc(d.burn.text)+'">⚠</span>') : '';
   var html='<div class="fbblock'+(opn?' open':'')+'" data-fbarow="'+esc(a.account)+'">'
     + '<div class="fbgrid fbrow" data-act="fb-toggle" data-acct="'+esc(a.account)+'">'
     + '<div class="c-chev" style="justify-content:center"><span class="chev">▾</span></div>'
     + '<div class="c-name">'+burnDot+'<span class="acc-name" title="'+esc(a.account)+'">'+esc(a.account)+'</span>'
-      + '<span class="acc-plats"><span class="tag">FB</span><span class="tag flat">'+a.campaigns.length+' camp'+(a.campaigns.length===1?'':'s')+'</span></span></div>'
+      + '<span class="acc-plats"><span class="tag">FB</span><span class="tag flat">'+camps.length+' camp'+(camps.length===1?'':'s')+'</span></span></div>'
     + '<div class="c-num strong fb-mtd">'+cl(money(d.mtd,true))+'</div>'
     + '<div class="c-num fb-forecast">'+cl(money(d.forecast,true))+'</div>'
     + '<div class="c-budget total-budget fb-abudget">'+money(d.effBudget,true)+'</div>'
@@ -339,7 +358,7 @@ function acctRowHTML(a,isLive){
     + '<div class="c-chev"></div></div>';
   if(opn){
     html+='<div class="fbcamps">';
-    a.campaigns.forEach(function(camp){ html+=campRowHTML(a,camp,isLive); });
+    camps.forEach(function(camp){ html+=campRowHTML(a,camp,isLive); });
     html+='</div>';
   }
   return html+'</div>';

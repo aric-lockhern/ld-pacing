@@ -684,15 +684,16 @@ function notifHTML(){
 }
 function topbarHTML(){
   var isLive=state.viewMonth===state.liveKey, inSettings=state.view==='settings', view=state.view;
-  var tabs='<div class="tabs"><button class="tab '+(view==='pacing'?'on':'')+'" data-act="tab-pacing">Pacing</button>'
-    + '<button class="tab '+(view==='facebook'?'on':'')+'" data-act="tab-facebook">Facebook</button>'
-    + '<button class="tab '+(inSettings?'on':'')+'" data-act="tab-settings">Settings</button></div>';
-  var right = inSettings ? tabs :
-    ('<div class="topright"><div class="monthnav"><button class="mn-arrow" data-act="prev">‹</button>'
+  var channels='<div class="tabs"><button class="tab '+(view==='pacing'?'on':'')+'" data-act="tab-pacing">Search</button>'
+    + '<button class="tab '+(view==='facebook'?'on':'')+'" data-act="tab-facebook">Social</button></div>';
+  var settings='<div class="tabs"><button class="tab '+(inSettings?'on':'')+'" data-act="tab-settings">Settings</button></div>';
+  var monthnav = inSettings ? '' :
+    ('<div class="monthnav"><button class="mn-arrow" data-act="prev">‹</button>'
       + '<div class="mn-label">'+esc(monthLabel(state.viewMonth))+'<span class="mn-tag '+(isLive?'live':'plan')+'">'+(isLive?'Live':'Planning')+'</span></div>'
       + '<button class="mn-arrow" data-act="next">›</button>'
-      + (isLive?'':'<button class="mn-today" data-act="today">Today</button>')+'</div>'+tabs+'</div>');
-  return '<div class="topbar"><div class="brand"><span class="mark">Lockhern</span><span class="sep">/</span><span class="prod">Account Pacing</span>'+sourceChip()+'</div>'+right+'</div>';
+      + (isLive?'':'<button class="mn-today" data-act="today">Today</button>')+'</div>');
+  var brand='<div class="brand"><span class="mark">Lockhern</span><span class="sep">/</span><span class="prod">Account Pacing</span>'+sourceChip()+'</div>';
+  return '<div class="topbar"><div class="topcluster" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'+brand+channels+monthnav+'</div>'+settings+'</div>';
 }
 function settingsHTML(){
   var connected = WEBAPP_URL.indexOf('http')===0;
