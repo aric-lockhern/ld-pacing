@@ -44,10 +44,12 @@ push.
 edit the project at script.google.com, then **Deploy → Manage deployments →
 New version** (the `/exec` URL keeps serving the old code until you do).
 
-The real `SLACK_WEBHOOK_URL` and `SLACK_BOT_TOKEN` live only in the deployed
-Apps Script project — they are **redacted** in this repo. Never commit the real
-values (GitHub secret scanning will block the push, and this feeds a public
-site).
+The real `SLACK_WEBHOOK_URL` and `SLACK_BOT_TOKEN` live in the Apps Script
+project's **Script properties** (Project Settings → Script properties), not in
+this file — so they survive every redeploy and never end up in the repo (GitHub
+secret scanning blocks committing them, and this feeds a public site). Add the
+two properties once, or paste them into `saveSlackSecrets()` and Run it once.
+The constants in `Code.gs` are inert `REDACTED_…` fallbacks.
 
 ## Facebook tab
 

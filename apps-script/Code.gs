@@ -16,10 +16,14 @@
  * AFTER ANY EDIT you must publish a NEW VERSION or the /exec URL keeps serving
  * the old code: Deploy → Manage deployments → (pencil) → Version: New version → Deploy.
  *
- * SECRETS: SLACK_WEBHOOK_URL and SLACK_BOT_TOKEN below are REDACTED in this
- * repo copy. Paste the real values into the deployed Apps Script project only —
- * never commit them here (GitHub secret scanning will block the push, and a
- * public web app must not carry live credentials).
+ * SECRETS: the real Slack webhook URL + bot token are stored in this project's
+ * SCRIPT PROPERTIES, not in this file (GitHub secret scanning blocks committing
+ * them, and a public web app must not carry live credentials). They survive
+ * every redeploy. Set them ONCE, either way:
+ *   • Project Settings → Script properties → add SLACK_WEBHOOK_URL and
+ *     SLACK_BOT_TOKEN, or
+ *   • paste them into saveSlackSecrets() below, Run it once, then blank them.
+ * The constants below are only inert fallbacks for the repo copy.
  * ------------------------------------------------------------------ */
 
 var SPREADSHEET_ID = '19AOeg1RK0O09hJQpU1ItDRnYBEuNg2aGnyWzpgv_Sqk';
@@ -31,8 +35,29 @@ var GROUP_TAB      = 'Groups';
 var GROUP_HEADER   = ['AccountId', 'Platform', 'Account', 'Group', 'Hidden', 'Type', 'Manager', 'Updated'];
 var DISMISS_TAB    = 'Dismissals';
 var DISMISS_HEADER = ['Client', 'Until', 'Updated'];
-var SLACK_WEBHOOK_URL = 'REDACTED_SET_IN_DEPLOYED_SCRIPT'; // Incoming Webhook for #pacing — paste real value in the Apps Script project only
-var SLACK_BOT_TOKEN   = 'REDACTED_SET_IN_DEPLOYED_SCRIPT'; // xoxb-… ; needs the users:read scope, to list members — paste real value in the Apps Script project only
+var SLACK_WEBHOOK_URL = 'REDACTED_SET_IN_DEPLOYED_SCRIPT'; // fallback only — real value lives in Script property SLACK_WEBHOOK_URL
+var SLACK_BOT_TOKEN   = 'REDACTED_SET_IN_DEPLOYED_SCRIPT'; // fallback only — real value lives in Script property SLACK_BOT_TOKEN
+
+// Prefer a Script property; fall back to the constant above. This keeps the
+// live secrets out of the repo AND makes them survive redeploys from the repo.
+function scriptProp_(key, fallback) {
+  try { var v = PropertiesService.getScriptProperties().getProperty(key); if (v && String(v).trim()) return v; } catch (e) {}
+  return fallback;
+}
+function slackWebhookUrl_() { return scriptProp_('SLACK_WEBHOOK_URL', SLACK_WEBHOOK_URL); }
+function slackBotToken_()   { return scriptProp_('SLACK_BOT_TOKEN',   SLACK_BOT_TOKEN); }
+
+// One-time setup helper. Paste your real values, Run this once from the editor,
+// then blank them out again. (Or add the two Script properties in Project
+// Settings and skip this entirely.)
+function saveSlackSecrets() {
+  var WEBHOOK = ''; // e.g. https://hooks.slack.com/services/XXX/YYY/ZZZ
+  var TOKEN   = ''; // e.g. xoxb-...
+  var props = PropertiesService.getScriptProperties();
+  if (WEBHOOK) props.setProperty('SLACK_WEBHOOK_URL', WEBHOOK);
+  if (TOKEN)   props.setProperty('SLACK_BOT_TOKEN', TOKEN);
+  Logger.log('Saved ' + (WEBHOOK ? 'webhook ' : '') + (TOKEN ? 'token' : '') + ' to Script properties — now blank the values above.');
+}
 
 /* ---- automatic budget alerts (daily timer; see installBudgetAlertTrigger) ----
    Fires once per account per month per tier, so the channel never gets spammed.
@@ -252,7 +277,7 @@ function setDismiss(p) {
 // Run this once from the editor (Run ▸ testSlack) to grant the internet
 // permission and confirm the webhook works — it should post a test line to #pacing.
 function testSlack() {
-  var res = UrlFetchApp.fetch(SLACK_WEBHOOK_URL, {
+  var res = UrlFetchApp.fetch(slackWebhookUrl_(), {
     method: 'post', contentType: 'application/json',
     payload: JSON.stringify({ text: 'Pacing gateway test ✅' }), muteHttpExceptions: true
   });
@@ -265,8 +290,9 @@ function postSlack(p) {
   return slackSend(text);
 }
 function slackSend(text) {
-  if (SLACK_WEBHOOK_URL.indexOf('http') !== 0) throw new Error('Slack webhook not set in the gateway');
-  var res = UrlFetchApp.fetch(SLACK_WEBHOOK_URL, {
+  var webhook = slackWebhookUrl_();
+  if (webhook.indexOf('http') !== 0) throw new Error('Slack webhook not set in the gateway — add the SLACK_WEBHOOK_URL Script property (Project Settings), then redeploy a new version');
+  var res = UrlFetchApp.fetch(webhook, {
     method: 'post', contentType: 'application/json',
     payload: JSON.stringify({ text: text }), muteHttpExceptions: true
   });
@@ -276,7 +302,8 @@ function slackSend(text) {
 /* ---- Slack: list active workspace members (for the manager picker) ---- */
 function slackUsers(p) {
   requireSecret(p);
-  if (SLACK_BOT_TOKEN.indexOf('xox') !== 0) throw new Error('Slack bot token not set in the gateway');
+  var token = slackBotToken_();
+  if (token.indexOf('xox') !== 0) throw new Error('Slack bot token not set in the gateway');
   var cache = CacheService.getScriptCache();
   var hit = cache.get('slackUsers');
   if (hit) return { ok: true, users: JSON.parse(hit), cached: true };
@@ -284,7 +311,7 @@ function slackUsers(p) {
   var out = [], cursor = '', guard = 0;
   do {
     var url = 'https://slack.com/api/users.list?limit=200' + (cursor ? ('&cursor=' + encodeURIComponent(cursor)) : '');
-    var res = UrlFetchApp.fetch(url, { method: 'get', headers: { Authorization: 'Bearer ' + SLACK_BOT_TOKEN }, muteHttpExceptions: true });
+    var res = UrlFetchApp.fetch(url, { method: 'get', headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
     var j = JSON.parse(res.getContentText());
     if (!j.ok) throw new Error('Slack: ' + (j.error || 'error'));
     (j.members || []).forEach(function (m) {
