@@ -26,6 +26,7 @@ state.fbBudgets     = state.fbBudgets || {};
 state.fbAccounts    = state.fbAccounts || [];
 state.fbCampaignsBy = state.fbCampaignsBy || {};
 state.fbRaw         = state.fbRaw || [];
+state.fbSlackFor    = state.fbSlackFor || null;
 if(state.fbSave==null)       state.fbSave='idle';
 if(state.fbDetailDays==null) state.fbDetailDays=30;
 /* state.fbSource stays undefined until the first load */
@@ -33,7 +34,7 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
 /* ---- one-time CSS (kept with the module) ---- */
 (function injectCSS(){
   var css =
-    '.fbgrid{display:grid;grid-template-columns:26px 2.5fr .9fr .9fr 1.05fr 1.1fr .95fr 1fr .8fr .8fr .7fr 40px;align-items:center;gap:10px;padding:0 16px;min-width:1120px;}'
+    '.fbgrid{display:grid;grid-template-columns:26px 2.3fr .82fr .82fr 1fr 1.05fr .88fr .95fr .78fr .74fr .84fr .66fr 40px;align-items:center;gap:9px;padding:0 16px;min-width:1200px;}'
   + '.fbhead{height:38px;background:#FAFBFC;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);font-weight:600;}'
   + '.fbrow{height:54px;cursor:pointer;font-size:14px;}'
   + '.fbrow:hover{background:#FAFBFC;}'
@@ -243,6 +244,7 @@ function acctDerive(acc){
    ============================================================ */
 FB.render = function(baseHtml){
   var html = baseHtml || topbarHTML();
+  if(typeof budgetReminderHTML==='function') html += budgetReminderHTML();
   var c=ctx(), isLive=c.isLive;
 
   if(state.fbSource==='loading' || state.fbSource==null){
@@ -256,8 +258,9 @@ FB.render = function(baseHtml){
 
   var accounts=(state.fbAccounts||[]).filter(function(a){ return acctVisibleCampaigns(a).length>0; });
   // summary
-  var t={mtd:0,forecast:0,budget:0,proj:0};
-  accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); });
+  var t={mtd:0,forecast:0,budget:0,proj:0,wc:0,fl:0,val:0};
+  accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); t.wc+=d.wc; t.fl+=d.fl; t.val+=d.val; });
+  t.roas = t.val>0 && t.mtd>0 ? t.val/t.mtd : null;
   t.pace = isLive&&t.budget>0 ? t.forecast/t.budget : null;
   t.variance = isLive ? t.forecast-t.budget : null;
   var cellL=function(v){ return isLive?v:'—'; };
@@ -292,7 +295,7 @@ FB.render = function(baseHtml){
     + '<div class="c-num">MTD spend</div><div class="c-num">Forecast</div>'
     + '<div class="c-budget">Budget</div><div class="c-pace">Pace to budget</div>'
     + '<div class="c-num">Δ vs budget</div><div class="c-num">Trending to</div>'
-    + '<div class="c-num">Web conv</div><div class="c-num">FB leads</div><div class="c-num">ROAS</div><div></div></div>';
+    + '<div class="c-num">Conversions</div><div class="c-num">FB leads</div><div class="c-num">Revenue</div><div class="c-num">ROAS</div><div></div></div>';
 
   accounts.forEach(function(a){ html += acctRowHTML(a,isLive); });
 
@@ -304,15 +307,69 @@ FB.render = function(baseHtml){
     + '<div class="c-pace">'+(isLive?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>')+'</div>'
     + '<div class="c-num '+(t.variance>0?'neg':'pos')+'">'+(isLive&&t.variance!=null?((t.variance>0?'+':'')+money(t.variance,true)):'—')+'</div>'
     + '<div class="c-num">'+fbTrendTot(t,isLive)+'</div>'
-    + '<div class="c-num">—</div><div class="c-num">—</div><div class="c-num">—</div><div></div></div>';
+    + '<div class="c-num">'+cellL(intf(t.wc))+'</div>'
+    + '<div class="c-num">'+cellL(intf(t.fl))+'</div>'
+    + '<div class="c-num">'+cellL(t.val>0?money(t.val,true):'—')+'</div>'
+    + '<div class="c-num">'+cellL(xfmt(t.roas))+'</div><div></div></div>';
 
   html += '</div></div>';
   html += '<div class="foot"><span>Account budget = sum of its campaign budgets.</span><span class="foot-dot">·</span>'
     + '<span>Default campaign budget = the sheet’s <b>Daily budget × days in month</b> until you set one.</span><span class="foot-dot">·</span>'
     + '<span>Only rows marked <b>Active</b> (column M) are shown.</span></div>';
 
+  html += fbSlackModalHTML();
   document.getElementById('app').innerHTML=html;
 };
+
+/* ---- Slack note (Social) — mirrors the Search tab's "Note to #pacing" ---- */
+function fbSlackTarget(){
+  var s=state.fbSlackFor; if(!s) return null;
+  if(s.kind==='campaign'){
+    var camp=fbFindCamp(s.account,s.campaign); if(!camp) return null;
+    return { name:s.account+' · '+s.campaign, d:campDerive(camp), unit:'campaign' };
+  }
+  var acc=fbFindAccount(s.account); if(!acc) return null;
+  return { name:s.account, d:acctDerive(acc), unit:'account' };
+}
+function fbStatsLine(d){
+  return 'MTD '+money(d.mtd,true)+' · Forecast '+money(d.forecast,true)+' · Budget '+money(d.effBudget,true)
+    + ' · Pace '+pct(d.pace)+' · Conv '+intf(d.wc)+(d.val>0?(' · Rev '+money(d.val,true)+' · ROAS '+xfmt(d.roas)):'');
+}
+function fbSlackModalHTML(){
+  var tgt=fbSlackTarget(); if(!tgt) return '';
+  var d=tgt.d, from=lsGet('lk_slackname','');
+  var pre = d.burn ? ((d.burn.level==='critical'?'🚨 ':'⚠ ')+d.burn.text) : '';
+  var alChip = d.burn ? '<div class="modal-alert '+(d.burn.level==='critical'?'critical':'warning')+'">Alert included — edit or add below</div>' : '';
+  return '<div class="modal-overlay" data-act="fb-slack-cancel"><div class="modal">'
+    + '<div class="modal-head"><span class="modal-title">Note to #pacing</span><button class="modal-x" data-act="fb-slack-cancel">×</button></div>'
+    + '<div class="modal-acc">'+esc(tgt.name)+'</div><div class="modal-stats">'+esc(fbStatsLine(d))+'</div>'
+    + alChip
+    + '<textarea id="fb-slack-note" class="modal-note" placeholder="What are you seeing? e.g. paused the top campaign Friday, expect pace to normalize by mid-week">'+esc(pre)+'</textarea>'
+    + '<input id="fb-slack-from" class="modal-from" placeholder="Your name (optional)" value="'+esc(from)+'">'
+    + '<div id="fb-slack-err" class="modal-err"></div>'
+    + '<div class="modal-actions"><button class="btn" data-act="fb-slack-cancel">Cancel</button><button id="fb-slack-send" class="btn primary" data-act="fb-slack-send">Send to #pacing</button></div>'
+    + '</div></div>';
+}
+function fbCloseSlack(){ state.fbSlackFor=null; render(); }
+function fbSendSlack(){
+  var tgt=fbSlackTarget(); if(!tgt) return;
+  var noteEl=document.getElementById('fb-slack-note'), fromEl=document.getElementById('fb-slack-from');
+  var note=(noteEl&&noteEl.value.trim())||'', from=(fromEl&&fromEl.value.trim())||'';
+  if(!note){ if(noteEl) noteEl.focus(); return; }
+  if(from) lsSet('lk_slackname', from);
+  var d=tgt.d;
+  var text='*'+tgt.name+'* — Facebook pacing note\n> '+note+'\n'+fbStatsLine(d)+(from?('\n_— '+from+'_'):'');
+  var btn=document.getElementById('fb-slack-send'), err=document.getElementById('fb-slack-err');
+  if(btn){ btn.disabled=true; btn.textContent='Sending…'; } if(err) err.textContent='';
+  jsonp({action:'postSlack', text:text}).then(function(r){
+    if(r&&r.ok){ fbCloseSlack(); toast('Sent to #pacing'); }
+    else {
+      if(btn){btn.disabled=false;btn.textContent='Send to #pacing';}
+      var reason=(r&&r.error)?r.error:((r&&r.code)?('Slack '+r.code):'redeploy the gateway as a new version');
+      if(err) err.textContent='Couldn’t send — '+reason;
+    }
+  }).catch(function(){ if(btn){btn.disabled=false;btn.textContent='Send to #pacing';} if(err) err.textContent='Couldn’t reach the gateway.'; });
+}
 
 function stat(label,value){ return '<div class="stat"><div class="stat-label">'+label+'</div><div class="stat-value">'+value+'</div></div>'; }
 function fbSaveText(){ return state.fbSave==='saving'?'Saving…':(state.fbSave==='saved'?'✓ Saved':'Shared with team'); }
@@ -354,8 +411,9 @@ function acctRowHTML(a,isLive){
     + (isLive?trendCellHTML(d.proj,d.burn):'<div class="c-num cell-trend">—</div>')
     + '<div class="c-num">'+cl(intf(d.wc))+'</div>'
     + '<div class="c-num">'+cl(intf(d.fl))+'</div>'
+    + '<div class="c-num">'+cl(d.val>0?money(d.val,true):'—')+'</div>'
     + '<div class="c-num">'+cl(xfmt(d.roas))+'</div>'
-    + '<div class="c-chev"></div></div>';
+    + '<div class="c-chev" data-noexpand="1"><button class="rowmsg" data-act="fb-slack" data-kind="account" data-acct="'+esc(a.account)+'" title="Note to #pacing">✎</button></div></div>';
   if(opn){
     html+='<div class="fbcamps">';
     camps.forEach(function(camp){ html+=campRowHTML(a,camp,isLive); });
@@ -394,8 +452,9 @@ function campRowHTML(a,camp,isLive){
     + (isLive?trendCellHTML(d.proj,d.burn):'<div class="c-num cell-trend">—</div>')
     + '<div class="c-num">'+cl(intf(d.wc))+'</div>'
     + '<div class="c-num">'+cl(intf(d.fl))+'</div>'
+    + '<div class="c-num">'+cl(d.val>0?money(d.val,true):'—')+'</div>'
     + '<div class="c-num">'+cl(xfmt(d.roas))+'</div>'
-    + '<div class="c-chev"><span class="chev">▾</span></div></div>';
+    + '<div class="c-chev"><button class="rowmsg" data-noexpand="1" data-act="fb-slack" data-kind="campaign" data-acct="'+esc(camp.account)+'" data-camp="'+esc(camp.campaign)+'" title="Note to #pacing">✎</button><span class="chev">▾</span></div></div>';
   if(opn) html+=campDetailHTML(camp,d);
   return html+'</div>';
 }
@@ -460,8 +519,8 @@ function fbChartsHTML(camp,d){
     + [30,60,90].map(function(dd){return '<button class="'+(days===dd?'on':'')+'" data-act="fb-range" data-days="'+dd+'">'+dd+'d</button>';}).join('')
     + '</div><span class="rangecount">'+n+' days · '+labelDate(rows[0].date)+' – '+labelDate(last.date)+'</span></div>';
 
-  var tbl='<table class="bd"><thead><tr><th>Day</th><th class="r">Spend</th><th class="r">Cumulative</th><th class="r">Expected</th><th class="r">Web conv</th><th class="r">FB leads</th>'
-    + (hasRev?'<th class="r">Value</th><th class="r">ROAS</th>':'')
+  var tbl='<table class="bd"><thead><tr><th>Day</th><th class="r">Spend</th><th class="r">Cumulative</th><th class="r">Expected</th><th class="r">Conversions</th><th class="r">FB leads</th>'
+    + (hasRev?'<th class="r">Revenue</th><th class="r">ROAS</th>':'')
     + '<th class="r">Clicks</th><th class="r">Impr.</th></tr></thead><tbody>';
   rows.slice().reverse().forEach(function(r){ tbl+='<tr><td>'+labelDate(r.date)+'</td><td class="r">'+money(r.cost)+'</td><td class="r">'+money(r.cum)+'</td><td class="r">'+(r.expected?money(r.expected):'—')+'</td><td class="r">'+intf(r.wc)+'</td><td class="r">'+intf(r.fl)+'</td>'
     + (hasRev?('<td class="r">'+(r.val>0?money(r.val):'—')+'</td><td class="r">'+(r.roas==null?'—':(r.roas.toFixed(2)+'x'))+'</td>'):'')
@@ -536,6 +595,9 @@ document.addEventListener('click', function(e){
   else if(act==='fb-to-manual'){ fbSetBudget(el.getAttribute('data-key'),{mode:'manual',amount:Number(el.getAttribute('data-amt'))||0}); }
   else if(act==='fb-mode'){ fbSetBudget(el.getAttribute('data-key'),{mode:el.getAttribute('data-mode')}); }
   else if(act==='fb-range'){ state.fbDetailDays=parseInt(el.getAttribute('data-days'),10)||30; render(); }
+  else if(act==='fb-slack'){ state.fbSlackFor={kind:el.getAttribute('data-kind'),account:el.getAttribute('data-acct'),campaign:el.getAttribute('data-camp')||''}; render(); var n=document.getElementById('fb-slack-note'); if(n) n.focus(); }
+  else if(act==='fb-slack-send'){ fbSendSlack(); }
+  else if(act==='fb-slack-cancel'){ if(el.classList.contains('modal-overlay') && e.target!==el) return; fbCloseSlack(); }
 });
 document.addEventListener('input', function(e){
   if(state.view!=='facebook') return;

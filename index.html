@@ -285,7 +285,7 @@ table.bd tr:last-child td{border-bottom:none;}
   .toolbar{gap:8px;}.tcount{flex-wrap:wrap;}
   .grid,.fbgrid{grid-template-columns:1.7fr .8fr 1fr .9fr 22px !important;min-width:0 !important;gap:8px;padding:0 12px;}
   .grid>*:nth-child(1),.grid>*:nth-child(4),.grid>*:nth-child(7),.grid>*:nth-child(8),.grid>*:nth-child(9),.grid>*:nth-child(10),.grid>*:nth-child(11){display:none !important;}
-  .fbgrid>*:nth-child(1),.fbgrid>*:nth-child(4),.fbgrid>*:nth-child(7),.fbgrid>*:nth-child(8),.fbgrid>*:nth-child(9),.fbgrid>*:nth-child(10),.fbgrid>*:nth-child(11){display:none !important;}
+  .fbgrid>*:nth-child(1),.fbgrid>*:nth-child(4),.fbgrid>*:nth-child(7),.fbgrid>*:nth-child(8),.fbgrid>*:nth-child(9),.fbgrid>*:nth-child(10),.fbgrid>*:nth-child(11),.fbgrid>*:nth-child(12){display:none !important;}
   .row,.fbrow,.fbcrow{height:auto !important;min-height:48px;}
   .c-name{flex-wrap:wrap;align-items:center;row-gap:3px;padding:9px 0;}
   .acc-name{white-space:normal;overflow:visible;flex:1 1 100%;min-width:0;overflow-wrap:anywhere;word-break:break-word;}
@@ -733,6 +733,13 @@ function topbarHTML(){
   var brand='<div class="brand"><span class="mark">Lockhern</span><span class="sep">/</span><span class="prod">Account Pacing</span>'+sourceChip()+'</div>';
   return '<div class="topbar"><div class="topcluster" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'+brand+channels+monthnav+'</div>'+settings+'</div>';
 }
+/* New-month reminder: nag to update this month's budgets until dismissed.
+   Dismissal is per-month, so it comes back when the next month begins. */
+function budgetReminderHTML(){
+  if(state.viewMonth!==state.liveKey) return '';                 // only on the live month
+  if(lsGet('lk_budget_reminder','')===state.liveKey) return '';  // dismissed for this month
+  return '<div class="banner plan"><span>📅 New month — review and update <b>'+esc(monthLabel(state.liveKey))+'</b> budgets across Search and Social. Budgets carry over from last month until you change them.</span><button data-act="dismiss-remind">Dismiss</button></div>';
+}
 function settingsHTML(){
   var connected = WEBAPP_URL.indexOf('http')===0;
   var sp=lsGet('lk_sort','name');
@@ -762,6 +769,8 @@ function render(){
   if(state.view==='facebook'){ if(window.FB){ FB.render(html); } else { html+='<div class="empty">Loading Facebook…</div>'; document.getElementById('app').innerHTML=html; } return; }
   var c=ctx(), vis=visibleAccounts(), list=sortAccounts(vis.list), t=totals(vis.list), isLive=c.isLive;
   var cellL=function(v){ return isLive?v:'—'; };
+
+  html+=budgetReminderHTML();
 
   /* feed banner */
   if(state.source==='sample'){
@@ -1427,6 +1436,7 @@ document.addEventListener('click', function(e){
   else if(act==='tab-pacing'){ state.view='pacing'; render(); }
   else if(act==='tab-facebook'){ state.view='facebook'; render(); if(window.FB) FB.load(); }
   else if(act==='tab-settings'){ state.view='settings'; render(); }
+  else if(act==='dismiss-remind'){ lsSet('lk_budget_reminder', state.liveKey); render(); }
   else if(act==='save-settings'){ saveSettings(); }
   else if(act==='toggle-all'){ state.showAll=!state.showAll; render(); }
   else if(act==='toggle-issues'){ state.filterIssues=!state.filterIssues; state.filterWins=false; render(); }
