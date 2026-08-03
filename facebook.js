@@ -18,6 +18,8 @@
 var FB = window.FB = {};
 var FB_RATE_DAYS = 3;                 // recent-rate window for "trending to"
 var fbSaveTimers = {};
+// Social manager — Slack notes from the Social tab tag them by default.
+var FB_SOCIAL_MANAGER = { name: 'Xand', id: 'U09214YNE8J' };
 
 /* ---- state fields this module owns (index.html doesn't declare them) ---- */
 state.fbOpen        = state.fbOpen || {};
@@ -34,7 +36,7 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
 /* ---- one-time CSS (kept with the module) ---- */
 (function injectCSS(){
   var css =
-    '.fbgrid{display:grid;grid-template-columns:26px 2.3fr .82fr .82fr 1fr 1.05fr .88fr .95fr .78fr .74fr .84fr .66fr 40px;align-items:center;gap:9px;padding:0 16px;min-width:1200px;}'
+    '.fbgrid{display:grid;grid-template-columns:24px 2.1fr .8fr .8fr .95fr 1fr .82fr .9fr .72fr .7fr .8fr .62fr 34px;align-items:center;gap:8px;padding:0 14px;min-width:1120px;}'
   + '.fbhead{height:38px;background:#FAFBFC;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);font-weight:600;}'
   + '.fbrow{height:54px;cursor:pointer;font-size:14px;}'
   + '.fbrow:hover{background:#FAFBFC;}'
@@ -343,6 +345,7 @@ function fbSlackModalHTML(){
   return '<div class="modal-overlay" data-act="fb-slack-cancel"><div class="modal">'
     + '<div class="modal-head"><span class="modal-title">Note to #pacing</span><button class="modal-x" data-act="fb-slack-cancel">×</button></div>'
     + '<div class="modal-acc">'+esc(tgt.name)+'</div><div class="modal-stats">'+esc(fbStatsLine(d))+'</div>'
+    + (FB_SOCIAL_MANAGER && FB_SOCIAL_MANAGER.id ? '<div class="modal-notify">Will notify <b>@'+esc(FB_SOCIAL_MANAGER.name)+'</b> in Slack</div>' : '')
     + alChip
     + '<textarea id="fb-slack-note" class="modal-note" placeholder="What are you seeing? e.g. paused the top campaign Friday, expect pace to normalize by mid-week">'+esc(pre)+'</textarea>'
     + '<input id="fb-slack-from" class="modal-from" placeholder="Your name (optional)" value="'+esc(from)+'">'
@@ -358,7 +361,8 @@ function fbSendSlack(){
   if(!note){ if(noteEl) noteEl.focus(); return; }
   if(from) lsSet('lk_slackname', from);
   var d=tgt.d;
-  var text='*'+tgt.name+'* — Facebook pacing note\n> '+note+'\n'+fbStatsLine(d)+(from?('\n_— '+from+'_'):'');
+  var mention = (FB_SOCIAL_MANAGER && FB_SOCIAL_MANAGER.id) ? ('<@'+FB_SOCIAL_MANAGER.id+'> ') : '';
+  var text=mention+'*'+tgt.name+'* — Facebook pacing note\n> '+note+'\n'+fbStatsLine(d)+(from?('\n_— '+from+'_'):'');
   var btn=document.getElementById('fb-slack-send'), err=document.getElementById('fb-slack-err');
   if(btn){ btn.disabled=true; btn.textContent='Sending…'; } if(err) err.textContent='';
   jsonp({action:'postSlack', text:text}).then(function(r){
