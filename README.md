@@ -62,9 +62,22 @@ read through the gateway's `fbData` action.
 - Two levels: an **account rollup** row, expandable to **per-campaign pacing**
   (each campaign has its own monthly budget).
 - Campaign budgets are stored in a `Facebook_Budgets` tab in the main sheet
-  (`Account · Campaign · Month · Mode · Amount`), separate from Google/Microsoft
-  budgets. A campaign's budget defaults to the sheet's **Daily budget × days in
-  month** until set, or can use **last month's spend** or a **manual** amount.
+  (`Account · Campaign · Month · Mode · Amount`), separate from Google/Microsoft.
+  Per-campaign budget **mode** (chosen in the expanded row):
+  - **Automatic** (default) — uses whatever the sheet reports for the campaign:
+    a **daily** budget → `spent so far + daily × days left`; a **lifetime**
+    budget → prorated to the month by flight dates (or the full amount if no
+    dates). This is the "just track what Meta has" mode.
+  - **Daily** — type a daily budget in the tool → `spent + daily × days left`.
+  - **Monthly** — a flat monthly amount.
+  - **Lifetime** — a lifetime amount, prorated to the month.
+  - A badge on each campaign shows whether Meta holds the budget at
+    **campaign (CBO)** or **ad-set (ABO)** level, and flags **lifetime**.
+
+  Optional columns on the `FB - Daily` sheet drive Automatic mode + the badge
+  (all optional; the tool infers/falls back if absent):
+  `Lifetime budget`, `Budget type` (daily|lifetime), `Budget level`
+  (campaign|ad set), and `Budget start` + `Budget end` (for lifetime proration).
 
 To point at a different FB spreadsheet/tab, edit `FB_SPREADSHEET_ID` / `FB_TAB`
 in `Code.gs`. The gateway's Google account must have access to that spreadsheet,

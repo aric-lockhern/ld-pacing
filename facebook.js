@@ -62,7 +62,9 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
   + '.fbdailyfield .pre{color:var(--faint);font-size:13px;}'
   + '.fbdailyfield .suf{color:var(--faint);font-size:11px;padding-left:1px;}'
   + '.fbdailyfield input{border:none;outline:none;background:transparent;text-align:right;width:52px;padding:3px 2px;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink);}'
-  + '.fbmohint{font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;}';
+  + '.fbmohint{font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;}'
+  + '.fbbud{font-size:9px;font-weight:700;color:var(--accent);background:var(--accent-bg);border-radius:4px;padding:1px 5px;white-space:nowrap;letter-spacing:.02em;}'
+  + '.fbautoval{display:inline-flex;align-items:center;gap:5px;font-size:14px;font-weight:650;font-variant-numeric:tabular-nums;color:var(--ink);}';
   var el=document.createElement('style'); el.textContent=css; document.head.appendChild(el);
 })();
 
@@ -98,7 +100,7 @@ function fbBudgetsToMap(rows){
   });
   return out;
 }
-function fbMode(m){ m=String(m||'manual'); return (m==='lastMonth'||m==='daily')?m:'manual'; }
+function fbMode(m){ m=String(m||'auto'); return (m==='lastMonth'||m==='daily'||m==='lifetime'||m==='auto'||m==='manual')?m:'auto'; }
 
 /* ============================================================
    BUILD — campaigns + account rollups
@@ -109,8 +111,12 @@ FB.rebuild = function(){
     var acct=String(r.a||'').trim(), camp=String(r.c||'').trim(), date=normDate(r.d);
     if(!acct || !date) return;
     var byC = camps[acct] || (camps[acct]={});
-    var o = byC[camp] || (byC[camp]={ account:acct, campaign:camp||'(unnamed campaign)', tags:r.tg||'', status:r.st||'', dailyBudget:0, dayMap:{} });
+    var o = byC[camp] || (byC[camp]={ account:acct, campaign:camp||'(unnamed campaign)', tags:r.tg||'', status:r.st||'', dailyBudget:0, lifetimeBudget:0, budgetType:'', budgetLevel:'', budgetStart:'', budgetEnd:'', dayMap:{} });
     var db=toNum(r.db); if(db>o.dailyBudget) o.dailyBudget=db;   // Facebook daily budget (max seen)
+    var lb=toNum(r.life); if(lb>o.lifetimeBudget) o.lifetimeBudget=lb; // lifetime budget (max seen)
+    if(r.bt) o.budgetType=String(r.bt).toLowerCase();           // daily | lifetime (from sheet)
+    if(r.bl) o.budgetLevel=String(r.bl).toLowerCase();          // campaign | ad set (from sheet)
+    if(r.bs) o.budgetStart=r.bs; if(r.be) o.budgetEnd=r.be;     // lifetime flight dates
     if(r.st) o.status=r.st;                                      // latest status wins
     var dm = o.dayMap[date] || (o.dayMap[date]={ date:date, cost:0, imp:0, clk:0, wc:0, fl:0, val:0 });
     dm.cost+=toNum(r.cost); dm.imp+=toNum(r.imp); dm.clk+=toNum(r.clk);
@@ -147,32 +153,64 @@ function aggMonth(daily, ym){
   return o;
 }
 
-// budget for one campaign (with carry-forward; default = the sheet's daily budget × days)
+// budget for one campaign (with carry-forward; default = Automatic, i.e. use
+// whatever budget the sheet reports for the campaign / ad set)
 function campGetBudget(camp){
   var month=state.viewMonth, key=fbKey(camp.account,camp.campaign);
   var ex = state.fbBudgets[month] && state.fbBudgets[month][key];
   if(ex) return { mode:ex.mode, amount:ex.amount, inherited:false };
   var k=month;
   for(var i=0;i<12;i++){ k=shiftKey(k,-1); var b=state.fbBudgets[k]&&state.fbBudgets[k][key]; if(b) return { mode:b.mode, amount:b.amount, inherited:true, from:k }; }
-  return { mode:'daily', amount:0, inherited:false, isDefault:true };   // no budget set → track against the FB daily budget
+  return { mode:'auto', amount:0, inherited:false, isDefault:true };
 }
-// The daily budget in effect for a campaign: the value Xand typed (b.amount in
-// daily mode), else the platform's Daily budget from the sheet.
+// What Meta actually has, from the sheet (with sane inference when unlabelled).
+function fbMetaType(camp){
+  if(camp.budgetType==='lifetime' || camp.budgetType==='daily') return camp.budgetType;
+  return (camp.lifetimeBudget>0) ? 'lifetime' : 'daily';
+}
+function fbMetaLevel(camp){
+  var l=String(camp.budgetLevel||'');
+  if(l==='ad set'||l==='adset'||l==='ad-set'||l==='abo') return 'ad set';
+  if(l==='campaign'||l==='cbo') return 'campaign';
+  return '';
+}
+function fbDaysInc(a,b){ var da=new Date(a+'T00:00:00'), db=new Date(b+'T00:00:00'); return Math.round((db-da)/86400000)+1; }
+// A lifetime budget's share of the current view month: prorated across the
+// flight when start/end are given, else the whole amount.
+function lifetimeMonthly(camp, lifetime){
+  if(!(lifetime>0)) return 0;
+  var s=camp.budgetStart, e=camp.budgetEnd, ym=state.viewMonth, dim=daysInMonthOf(ym);
+  if(s && e && e>=s){
+    var mStart=ym+'-01', mEnd=ym+'-'+('0'+dim).slice(-2);
+    var ovS=(s>mStart?s:mStart), ovE=(e<mEnd?e:mEnd);
+    if(ovE<ovS) return 0;
+    return lifetime * (fbDaysInc(ovS,ovE)/fbDaysInc(s,e));
+  }
+  return lifetime;
+}
+// The daily budget in effect: the value typed in daily mode, else the sheet's.
 function campDailyVal(camp, b){
   b = b || campGetBudget(camp);
   return (b.mode==='daily' && b.amount>0) ? b.amount : (camp.dailyBudget||0);
 }
-// Monthly budget the tool paces against.
-//   daily mode  → spent so far + daily budget × days left in the month
-//   manual      → the flat monthly amount
-//   lastMonth   → last month's actual spend
+// Monthly budget the tool paces against, per mode:
+//   auto      → whatever the sheet reports (daily → spent + daily×days-left; lifetime → prorated)
+//   daily     → spent so far + (typed daily budget) × days left
+//   lifetime  → prorated lifetime (typed, else the sheet's lifetime)
+//   manual    → the flat monthly amount
+//   lastMonth → last month's actual spend
 function campEffBudget(camp, b){
   b = b || campGetBudget(camp);
-  if(b.mode==='lastMonth') return aggMonth(camp.daily, shiftKey(state.viewMonth,-1)).cost;
-  if(b.mode==='manual')    return b.amount;
   var c=ctx(), daysLeft=Math.max(0, c.dim - c.elapsed);
   var mtd=aggMonth(camp.daily, state.viewMonth).cost;
-  return mtd + campDailyVal(camp,b)*daysLeft;
+  if(b.mode==='manual')    return b.amount;
+  if(b.mode==='lastMonth') return aggMonth(camp.daily, shiftKey(state.viewMonth,-1)).cost;
+  if(b.mode==='lifetime')  return lifetimeMonthly(camp, (b.amount>0?b.amount:camp.lifetimeBudget));
+  if(b.mode==='auto'){
+    if(fbMetaType(camp)==='lifetime') return lifetimeMonthly(camp, camp.lifetimeBudget);
+    return mtd + (camp.dailyBudget||0)*daysLeft;
+  }
+  return mtd + campDailyVal(camp,b)*daysLeft;   // daily
 }
 
 // generic pace for a "unit" = { mtd, effBudget, daily } (daily rows use .cost as spend)
@@ -334,7 +372,7 @@ FB.render = function(baseHtml){
 
   html += '</div></div>';
   html += '<div class="foot"><span>Account budget = sum of its campaign budgets.</span><span class="foot-dot">·</span>'
-    + '<span>Edit a campaign’s <b>daily budget</b> inline — monthly budget = <b>spent so far + daily × days left</b>. Defaults to the platform’s daily budget.</span><span class="foot-dot">·</span>'
+    + '<span>Budget per campaign: <b>Automatic</b> (from the sheet — daily → spent + daily × days left; lifetime → prorated), or set <b>Daily / Monthly / Lifetime</b> in the row. Badge shows campaign- vs ad-set-level.</span><span class="foot-dot">·</span>'
     + '<span>Only rows marked <b>Active</b> (column M) are shown.</span></div>';
 
   html += fbSlackModalHTML();
@@ -467,32 +505,59 @@ function acctRowHTML(a,isLive){
   return html+'</div>';
 }
 
+// Badge showing where Meta holds the budget: Campaign (CBO) vs Ad set (ABO),
+// and 'lifetime' when it's a lifetime budget. Blank until the sheet has the
+// Budget level / Budget type columns.
+function fbLevelBadge(camp){
+  var lvl=fbMetaLevel(camp), typ=fbMetaType(camp), bits=[];
+  if(lvl) bits.push(lvl==='ad set'?'Ad set':'Campaign');
+  if(typ==='lifetime') bits.push('lifetime');
+  if(!bits.length) return '';
+  return '<span class="fbbud" title="Budget held at '+esc(lvl||'unknown')+' level · '+esc(typ)+'">'+esc(bits.join(' · '))+'</span>';
+}
+// The budget cell, which varies by mode.
+function campBudgetCell(camp,d,b,key){
+  var carried = b.inherited ? '<span class="carried" title="Carried from '+esc(monthLabel(b.from))+'">↩</span>' : '';
+  var inh = b.inherited?' inherited':'';
+  if(b.mode==='manual'){
+    return carried+'<div class="budgetfield'+inh+'"><span class="bf-pre">$</span>'
+      +'<input class="bf-in fb-budget-input" data-key="'+esc(key)+'" inputmode="numeric" value="'+(b.amount===0?'':fmtInt(b.amount))+'" placeholder="Set budget"></div>';
+  }
+  if(b.mode==='lastMonth'){
+    return carried+'<button class="lmbudget fb-to-manual" data-key="'+esc(key)+'" data-amt="'+Math.round(d.effBudget)+'" title="Using last month’s spend — click to set manually">'+money(d.effBudget)+' <span class="lm">LM</span></button>';
+  }
+  if(b.mode==='lifetime'){
+    var lv=(b.amount>0?b.amount:camp.lifetimeBudget)||0;
+    return carried+'<div class="fbdailycell'+inh+'">'
+      +'<div class="fbdailyfield"><span class="pre">$</span><input class="fb-life-input" data-key="'+esc(key)+'" inputmode="numeric" value="'+(lv?fmtInt(lv):'')+'" placeholder="0"><span class="suf">life</span></div>'
+      +'<div class="fbmohint" title="Lifetime budget prorated to this month">'+money(d.effBudget,true)+'/mo</div></div>';
+  }
+  if(b.mode==='auto'){
+    var typ=fbMetaType(camp);
+    var sub = typ==='lifetime' ? (money(camp.lifetimeBudget,true)+' lifetime') : (money(camp.dailyBudget)+'/day');
+    return '<div class="fbdailycell"><div class="fbautoval">'+money(d.effBudget,true)+'<span class="lm">AUTO</span></div>'
+      +'<div class="fbmohint" title="Automatic — from the sheet’s reported budget">'+esc(sub)+'</div></div>';
+  }
+  // daily
+  var dv=campDailyVal(camp,b);
+  return carried+'<div class="fbdailycell'+inh+'">'
+    +'<div class="fbdailyfield"><span class="pre">$</span><input class="fb-daily-input" data-key="'+esc(key)+'" inputmode="numeric" value="'+(dv?fmtInt(dv):'')+'" placeholder="0"><span class="suf">/day</span></div>'
+    +'<div class="fbmohint" title="Monthly = spent so far + daily × days left">'+money(d.effBudget,true)+'/mo</div></div>';
+}
+
 /* ---- campaign pacing row (level 2) ---- */
 function campRowHTML(a,camp,isLive){
   var d=campDerive(camp), st=statusOf(d.pace), key=fbKey(camp.account,camp.campaign);
   var opn=!!state.fbCampOpen[key], cl=function(v){return isLive?v:'—';};
   var b=d.budget;
   var statusOn = String(camp.status||'').toUpperCase().indexOf('ACTIVE')>=0;
-  var carried = b.inherited ? '<span class="carried" title="Carried from '+esc(monthLabel(b.from))+'">↩</span>' : '';
-  var budgetCell;
-  if(b.mode==='manual'){
-    budgetCell = carried+'<div class="budgetfield'+(b.inherited?' inherited':'')+'"><span class="bf-pre">$</span>'
-      + '<input class="bf-in fb-budget-input" data-key="'+esc(key)+'" inputmode="numeric" value="'+(b.amount===0?'':fmtInt(b.amount))+'" placeholder="Set budget"></div>';
-  } else if(b.mode==='lastMonth'){
-    budgetCell = carried+'<button class="lmbudget fb-to-manual" data-key="'+esc(key)+'" data-amt="'+Math.round(d.effBudget)+'" title="Using last month’s spend — click to set manually">'+money(d.effBudget)+' <span class="lm">LM</span></button>';
-  } else {
-    // daily mode — Xand edits the daily budget here; monthly is derived
-    var dv=campDailyVal(camp,b);
-    budgetCell = carried+'<div class="fbdailycell'+(b.inherited?' inherited':'')+'">'
-      + '<div class="fbdailyfield"><span class="pre">$</span><input class="fb-daily-input" data-key="'+esc(key)+'" inputmode="numeric" value="'+(dv?fmtInt(dv):'')+'" placeholder="0"><span class="suf">/day</span></div>'
-      + '<div class="fbmohint" title="Monthly budget = spent so far + daily budget × days left">'+money(d.effBudget,true)+'/mo</div></div>';
-  }
+  var budgetCell = campBudgetCell(camp,d,b,key);
   var burnDot = d.burn ? ('<span class="alertdot '+(d.burn.level==='critical'?'crit':'')+'" title="'+esc(d.burn.text)+'">⚠</span>') : '';
   var html='<div class="fbcblock'+(opn?' open':'')+'" data-fbrow="'+esc(key)+'">'
     + '<div class="fbgrid fbcrow" data-act="fb-camp-toggle" data-key="'+esc(key)+'">'
     + '<div></div>'
     + '<div class="c-name">'+burnDot+'<span class="acc-name" title="'+esc(camp.campaign)+'">'+esc(camp.campaign)+'</span>'
-      + '<span class="acc-plats"><span class="fbstatus '+(statusOn?'on':'off')+'">'+(statusOn?'active':'paused')+'</span></span></div>'
+      + '<span class="acc-plats"><span class="fbstatus '+(statusOn?'on':'off')+'">'+(statusOn?'active':'paused')+'</span>'+fbLevelBadge(camp)+'</span></div>'
     + '<div class="c-num strong fb-mtd">'+cl(money(d.mtd,true))+'</div>'
     + '<div class="c-num fb-forecast">'+cl(money(d.forecast,true))+'</div>'
     + '<div class="c-budget fb-budgetcell" data-noexpand="1">'+budgetCell+'</div>'
@@ -512,15 +577,26 @@ function campRowHTML(a,camp,isLive){
 function campDetailHTML(camp,d){
   var key=fbKey(camp.account,camp.campaign), b=d.budget;
   var cx=ctx(), daysLeft=Math.max(0,cx.dim-cx.elapsed), dv=campDailyVal(camp,b), mtd=aggMonth(camp.daily,state.viewMonth).cost;
-  var meta = b.mode==='daily'
-      ? ('Daily budget '+money(dv)+'/day → '+money(mtd)+' spent + '+money(dv)+' × '+daysLeft+' day'+(daysLeft===1?'':'s')+' left = '+money(d.effBudget))
-      : (b.mode==='lastMonth' ? ('Last month spend = '+money(d.effBudget)) : ('Manual monthly budget = '+money(d.effBudget)));
+  var lvl=fbMetaLevel(camp), typ=fbMetaType(camp);
+  var flight = (camp.budgetStart&&camp.budgetEnd) ? (' over '+labelDate(camp.budgetStart)+'–'+labelDate(camp.budgetEnd)) : '';
+  var meta;
+  if(b.mode==='auto'){
+    meta = 'Automatic — Meta has a '+(lvl?lvl+'-level ':'')+typ+' budget'
+      + (typ==='lifetime' ? (' of '+money(camp.lifetimeBudget)+flight+' → '+money(d.effBudget)+' this month')
+                          : (' of '+money(camp.dailyBudget)+'/day → '+money(mtd)+' spent + '+money(camp.dailyBudget)+' × '+daysLeft+' left = '+money(d.effBudget)));
+  } else if(b.mode==='daily'){
+    meta = 'Daily budget '+money(dv)+'/day → '+money(mtd)+' spent + '+money(dv)+' × '+daysLeft+' day'+(daysLeft===1?'':'s')+' left = '+money(d.effBudget);
+  } else if(b.mode==='lifetime'){
+    var lval=(b.amount>0?b.amount:camp.lifetimeBudget)||0;
+    meta = 'Lifetime budget '+money(lval)+flight+' → '+money(d.effBudget)+' this month';
+  } else if(b.mode==='lastMonth'){
+    meta = 'Last month spend = '+money(d.effBudget);
+  } else {
+    meta = 'Manual monthly budget = '+money(d.effBudget);
+  }
+  function mbtn(m,label){ return '<button class="'+(b.mode===m?'on':'')+'" data-act="fb-mode" data-key="'+esc(key)+'" data-mode="'+m+'">'+label+'</button>'; }
   var box='<div class="fbbudgetbox"><div class="bb-title">'+esc(monthLabel(state.viewMonth))+' budget</div>'
-    + '<div class="segment">'
-    + '<button class="'+(b.mode==='daily'?'on':'')+'" data-act="fb-mode" data-key="'+esc(key)+'" data-mode="daily">Daily budget</button>'
-    + '<button class="'+(b.mode==='manual'?'on':'')+'" data-act="fb-mode" data-key="'+esc(key)+'" data-mode="manual">Set monthly</button>'
-    + '<button class="'+(b.mode==='lastMonth'?'on':'')+'" data-act="fb-mode" data-key="'+esc(key)+'" data-mode="lastMonth">Use last month</button>'
-    + '</div>'
+    + '<div class="segment">'+mbtn('auto','Automatic')+mbtn('daily','Daily')+mbtn('manual','Monthly')+mbtn('lifetime','Lifetime')+'</div>'
     + '<span class="fbmeta">'+esc(meta)+(camp.tags?(' · tags: '+esc(camp.tags)):'')+'</span>'
     + '</div>';
   var charts=fbChartsHTML(camp,d);
@@ -649,9 +725,10 @@ document.addEventListener('click', function(e){
   else if(act==='fb-camp-toggle'){ if(e.target.closest('[data-noexpand]')) return; var k=el.getAttribute('data-key'); state.fbCampOpen[k]=!state.fbCampOpen[k]; render(); }
   else if(act==='fb-to-manual'){ fbSetBudget(el.getAttribute('data-key'),{mode:'manual',amount:Number(el.getAttribute('data-amt'))||0}); }
   else if(act==='fb-mode'){
-    var mkey=el.getAttribute('data-key'), mode=el.getAttribute('data-mode'), patch={mode:mode};
-    if(mode==='daily') patch.amount=0;                                  // start from the sheet's daily budget
-    else if(mode==='manual'){ var mc=fbCampByKey(mkey); if(mc) patch.amount=Math.round(campEffBudget(mc)); } // seed with the current monthly
+    var mkey=el.getAttribute('data-key'), mode=el.getAttribute('data-mode'), patch={mode:mode}, mc=fbCampByKey(mkey);
+    if(mode==='auto'||mode==='daily') patch.amount=0;                   // start from the sheet's value
+    else if(mode==='lifetime') patch.amount=mc?Math.round(mc.lifetimeBudget||0):0;
+    else if(mode==='manual'){ if(mc) patch.amount=Math.round(campEffBudget(mc)); }  // seed with current monthly
     fbSetBudget(mkey,patch);
   }
   else if(act==='fb-range'){ state.fbDetailDays=parseInt(el.getAttribute('data-days'),10)||30; render(); }
@@ -683,6 +760,15 @@ document.addEventListener('input', function(e){
     try{ del.setSelectionRange(dp,dp); }catch(err){}
     fbSetBudget(dkey,{mode:'daily',amount:dval}, true);  // store the DAILY budget; keep focus
     fbPatchKey(dkey);
+  } else if(e.target.classList.contains('fb-life-input')){
+    var lel=e.target, lkey=lel.getAttribute('data-key');
+    var ldig=lel.value.replace(/[^0-9]/g,''); var lval=ldig===''?0:parseInt(ldig,10);
+    var lbefore=lel.value.slice(0,lel.selectionStart).replace(/[^0-9]/g,'').length;
+    var lfmt=ldig===''?'':lval.toLocaleString('en-US'); lel.value=lfmt;
+    var lp=0,ls=0; while(lp<lfmt.length&&ls<lbefore){ if(lfmt.charCodeAt(lp)>=48&&lfmt.charCodeAt(lp)<=57) ls++; lp++; }
+    try{ lel.setSelectionRange(lp,lp); }catch(err){}
+    fbSetBudget(lkey,{mode:'lifetime',amount:lval}, true);  // store the LIFETIME budget; keep focus
+    fbPatchKey(lkey);
   } else if(e.target.id==='fb-day-input'){
     var v=e.target.value.replace(/[^0-9]/g,'');
     state.elapsedOverride = v===''?null:parseInt(v,10);

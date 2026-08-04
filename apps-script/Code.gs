@@ -555,7 +555,10 @@ function readFbRows() {
       iTags = c('Campaign tags'), iDB = c('Daily budget'), iStatus = c('Campaign status'),
       iCost = c('Total Cost'), iImp = c('Impressions'), iClk = c('Clicks'),
       iWC = c('Website conversions'), iFL = c('On Facebook Leads'), iVal = c('Website conversions value'),
-      iActive = c('Active');
+      iActive = c('Active'),
+      // Optional budget-designation columns (add any of these to the sheet):
+      iLife = c('Lifetime budget'), iBType = c('Budget type'), iBLevel = c('Budget level'),
+      iBStart = c('Budget start'), iBEnd = c('Budget end');
   if (iActive < 0) throw new Error('Facebook sheet is missing the "Active" column');
 
   var cd = new Date(); cd.setDate(cd.getDate() - FB_LOOKBACK_DAYS);
@@ -575,7 +578,12 @@ function readFbRows() {
       db: iDB < 0 ? 0 : numv(r[iDB]),
       st: iStatus < 0 ? '' : String(r[iStatus] || '').trim(),
       cost: numv(r[iCost]), imp: numv(r[iImp]), clk: numv(r[iClk]),
-      wc: numv(r[iWC]), fl: numv(r[iFL]), val: numv(r[iVal])
+      wc: numv(r[iWC]), fl: numv(r[iFL]), val: numv(r[iVal]),
+      life: iLife  < 0 ? 0  : numv(r[iLife]),                         // lifetime budget amount
+      bt:   iBType < 0 ? '' : String(r[iBType]  || '').trim(),        // 'daily' | 'lifetime'
+      bl:   iBLevel< 0 ? '' : String(r[iBLevel] || '').trim(),       // 'campaign' | 'ad set'
+      bs:   iBStart< 0 ? '' : normDateG(r[iBStart]),                  // lifetime flight start
+      be:   iBEnd  < 0 ? '' : normDateG(r[iBEnd])                     // lifetime flight end
     });
   }
   return out;
