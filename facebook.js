@@ -54,7 +54,15 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
   + '.fbdetail{padding:2px 16px 18px 30px;background:#F7FAFC;border-top:1px dashed var(--line);}'
   + '.fbbudgetbox{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--editbg);border:1px solid var(--editline);border-radius:10px;padding:10px 13px;margin:12px 0;}'
   + '.fbbudgetbox .bb-title{margin:0;}'
-  + '.fbmeta{font-size:11px;color:var(--faint);font-weight:600;}';
+  + '.fbmeta{font-size:11px;color:var(--faint);font-weight:600;}'
+  + '.fbdailycell{display:flex;flex-direction:column;align-items:flex-end;gap:2px;margin-left:auto;}'
+  + '.fbdailyfield{display:inline-flex;align-items:center;background:var(--editbg);border:1px solid var(--editline);border-radius:8px;padding:2px 7px;}'
+  + '.fbdailyfield.inherited,.fbdailycell.inherited .fbdailyfield{border-style:dashed;border-color:var(--accent);}'
+  + '.fbdailyfield:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);background:#fff;}'
+  + '.fbdailyfield .pre{color:var(--faint);font-size:13px;}'
+  + '.fbdailyfield .suf{color:var(--faint);font-size:11px;padding-left:1px;}'
+  + '.fbdailyfield input{border:none;outline:none;background:transparent;text-align:right;width:52px;padding:3px 2px;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink);}'
+  + '.fbmohint{font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;}';
   var el=document.createElement('style'); el.textContent=css; document.head.appendChild(el);
 })();
 
@@ -148,11 +156,23 @@ function campGetBudget(camp){
   for(var i=0;i<12;i++){ k=shiftKey(k,-1); var b=state.fbBudgets[k]&&state.fbBudgets[k][key]; if(b) return { mode:b.mode, amount:b.amount, inherited:true, from:k }; }
   return { mode:'daily', amount:0, inherited:false, isDefault:true };   // no budget set → track against the FB daily budget
 }
+// The daily budget in effect for a campaign: the value Xand typed (b.amount in
+// daily mode), else the platform's Daily budget from the sheet.
+function campDailyVal(camp, b){
+  b = b || campGetBudget(camp);
+  return (b.mode==='daily' && b.amount>0) ? b.amount : (camp.dailyBudget||0);
+}
+// Monthly budget the tool paces against.
+//   daily mode  → spent so far + daily budget × days left in the month
+//   manual      → the flat monthly amount
+//   lastMonth   → last month's actual spend
 function campEffBudget(camp, b){
   b = b || campGetBudget(camp);
   if(b.mode==='lastMonth') return aggMonth(camp.daily, shiftKey(state.viewMonth,-1)).cost;
-  if(b.mode==='daily')     return (camp.dailyBudget||0) * ctx().dim;
-  return b.amount;
+  if(b.mode==='manual')    return b.amount;
+  var c=ctx(), daysLeft=Math.max(0, c.dim - c.elapsed);
+  var mtd=aggMonth(camp.daily, state.viewMonth).cost;
+  return mtd + campDailyVal(camp,b)*daysLeft;
 }
 
 // generic pace for a "unit" = { mtd, effBudget, daily } (daily rows use .cost as spend)
@@ -270,12 +290,10 @@ FB.render = function(baseHtml){
   html += '<div class="summary">'
     + stat('MTD spend', cellL(money(t.mtd)))
     + stat('Forecast', cellL(money(t.forecast)))
-    + stat('Budget (rollup)', money(t.budget))
-    + '<div class="stat stat-pace"><div class="stat-label">Facebook pace</div>'
-    + (isLive
-        ? '<div class="pace-row"><span class="pace-num t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span><span class="pace-var t-'+(t.variance>0?'over':'good')+'">'+(t.variance>0?'+':'')+money(t.variance,true)+' vs budget</span></div>'+meterHTML(t.pace,statusOf(t.pace))
-        : '<div class="pace-plan">Set budgets for '+esc(monthLabel(state.viewMonth))+'</div>')
-    + '</div></div>';
+    + '<div class="stat"><div class="stat-label">Budget (rollup)</div><div class="stat-value" id="fb-sum-budget">'+money(t.budget)+'</div></div>'
+    + '<div class="stat stat-pace"><div class="stat-label">Facebook pace</div><div id="fb-sum-pace">'
+    + fbSummaryPaceHTML(t,isLive)
+    + '</div></div></div>';
 
   // toolbar
   html += '<div class="toolbar"><div class="tcount">Accounts <span class="badge">'+accounts.length+'</span>'
@@ -305,10 +323,10 @@ FB.render = function(baseHtml){
   html += '<div class="fbgrid totalrow"><div></div><div class="c-name">Facebook total</div>'
     + '<div class="c-num strong">'+cellL(money(t.mtd,true))+'</div>'
     + '<div class="c-num">'+cellL(money(t.forecast,true))+'</div>'
-    + '<div class="c-budget total-budget">'+money(t.budget,true)+'</div>'
-    + '<div class="c-pace">'+(isLive?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>')+'</div>'
-    + '<div class="c-num '+(t.variance>0?'neg':'pos')+'">'+(isLive&&t.variance!=null?((t.variance>0?'+':'')+money(t.variance,true)):'—')+'</div>'
-    + '<div class="c-num">'+fbTrendTot(t,isLive)+'</div>'
+    + '<div class="c-budget total-budget" id="fb-tr-budget">'+money(t.budget,true)+'</div>'
+    + '<div class="c-pace" id="fb-tr-pace">'+(isLive?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>')+'</div>'
+    + '<div class="c-num '+(t.variance>0?'neg':'pos')+'" id="fb-tr-var">'+(isLive&&t.variance!=null?((t.variance>0?'+':'')+money(t.variance,true)):'—')+'</div>'
+    + '<div class="c-num" id="fb-tr-trend">'+fbTrendTot(t,isLive)+'</div>'
     + '<div class="c-num">'+cellL(intf(t.wc))+'</div>'
     + '<div class="c-num">'+cellL(intf(t.fl))+'</div>'
     + '<div class="c-num">'+cellL(t.val>0?money(t.val,true):'—')+'</div>'
@@ -316,7 +334,7 @@ FB.render = function(baseHtml){
 
   html += '</div></div>';
   html += '<div class="foot"><span>Account budget = sum of its campaign budgets.</span><span class="foot-dot">·</span>'
-    + '<span>Default campaign budget = the sheet’s <b>Daily budget × days in month</b> until you set one.</span><span class="foot-dot">·</span>'
+    + '<span>Edit a campaign’s <b>daily budget</b> inline — monthly budget = <b>spent so far + daily × days left</b>. Defaults to the platform’s daily budget.</span><span class="foot-dot">·</span>'
     + '<span>Only rows marked <b>Active</b> (column M) are shown.</span></div>';
 
   html += fbSlackModalHTML();
@@ -376,6 +394,29 @@ function fbSendSlack(){
 }
 
 function stat(label,value){ return '<div class="stat"><div class="stat-label">'+label+'</div><div class="stat-value">'+value+'</div></div>'; }
+function fbSummaryPaceHTML(t,isLive){
+  return isLive
+    ? '<div class="pace-row"><span class="pace-num t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span><span class="pace-var t-'+(t.variance>0?'over':'good')+'">'+(t.variance>0?'+':'')+money(t.variance,true)+' vs budget</span></div>'+meterHTML(t.pace,statusOf(t.pace))
+    : '<div class="pace-plan">Set budgets for '+esc(monthLabel(state.viewMonth))+'</div>';
+}
+// Recompute portfolio totals and refresh the summary + total-row cells that a
+// budget edit changes (budget, pace, variance, trending). Keeps input focus.
+function fbPatchTotals(){
+  var isLive=state.viewMonth===state.liveKey;
+  var accounts=(state.fbAccounts||[]).filter(function(a){ return acctVisibleCampaigns(a).length>0; });
+  var t={mtd:0,forecast:0,budget:0,proj:0};
+  accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); });
+  t.pace=isLive&&t.budget>0?t.forecast/t.budget:null;
+  t.variance=isLive?t.forecast-t.budget:null;
+  t.projPct=isLive&&t.budget>0?t.proj/t.budget:null; t.projGap=isLive&&t.budget>0?t.proj-t.budget:null;
+  function byId(id){ return document.getElementById(id); }
+  var sb=byId('fb-sum-budget'); if(sb) sb.textContent=money(t.budget);
+  var sp=byId('fb-sum-pace'); if(sp) sp.innerHTML=fbSummaryPaceHTML(t,isLive);
+  var tb=byId('fb-tr-budget'); if(tb) tb.textContent=money(t.budget,true);
+  var tp=byId('fb-tr-pace'); if(tp) tp.innerHTML=isLive?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>';
+  var tv=byId('fb-tr-var'); if(tv){ tv.className='c-num '+(t.variance>0?'neg':'pos'); tv.textContent=(isLive&&t.variance!=null)?((t.variance>0?'+':'')+money(t.variance,true)):'—'; }
+  var tt=byId('fb-tr-trend'); if(tt) tt.innerHTML=fbTrendTot(t,isLive);
+}
 function fbSaveText(){ return state.fbSave==='saving'?'Saving…':(state.fbSave==='saved'?'✓ Saved':'Shared with team'); }
 function fbUpdateSaveInd(){ var el=document.getElementById('fb-saveind'); if(el){ el.className='saveind '+state.fbSave; el.textContent=fbSaveText(); } }
 
@@ -437,10 +478,14 @@ function campRowHTML(a,camp,isLive){
   if(b.mode==='manual'){
     budgetCell = carried+'<div class="budgetfield'+(b.inherited?' inherited':'')+'"><span class="bf-pre">$</span>'
       + '<input class="bf-in fb-budget-input" data-key="'+esc(key)+'" inputmode="numeric" value="'+(b.amount===0?'':fmtInt(b.amount))+'" placeholder="Set budget"></div>';
+  } else if(b.mode==='lastMonth'){
+    budgetCell = carried+'<button class="lmbudget fb-to-manual" data-key="'+esc(key)+'" data-amt="'+Math.round(d.effBudget)+'" title="Using last month’s spend — click to set manually">'+money(d.effBudget)+' <span class="lm">LM</span></button>';
   } else {
-    var tag = b.mode==='lastMonth'?'LM':'DB';
-    var title = b.mode==='lastMonth'?'Using last month’s spend — click to set manually':'Using the Facebook daily budget × days — click to set manually';
-    budgetCell = carried+'<button class="lmbudget fb-to-manual" data-key="'+esc(key)+'" data-amt="'+Math.round(d.effBudget)+'" title="'+esc(title)+'">'+money(d.effBudget)+' <span class="lm">'+tag+'</span></button>';
+    // daily mode — Xand edits the daily budget here; monthly is derived
+    var dv=campDailyVal(camp,b);
+    budgetCell = carried+'<div class="fbdailycell'+(b.inherited?' inherited':'')+'">'
+      + '<div class="fbdailyfield"><span class="pre">$</span><input class="fb-daily-input" data-key="'+esc(key)+'" inputmode="numeric" value="'+(dv?fmtInt(dv):'')+'" placeholder="0"><span class="suf">/day</span></div>'
+      + '<div class="fbmohint" title="Monthly budget = spent so far + daily budget × days left">'+money(d.effBudget,true)+'/mo</div></div>';
   }
   var burnDot = d.burn ? ('<span class="alertdot '+(d.burn.level==='critical'?'crit':'')+'" title="'+esc(d.burn.text)+'">⚠</span>') : '';
   var html='<div class="fbcblock'+(opn?' open':'')+'" data-fbrow="'+esc(key)+'">'
@@ -466,13 +511,17 @@ function campRowHTML(a,camp,isLive){
 /* ---- campaign detail: budget mode + charts + daily table ---- */
 function campDetailHTML(camp,d){
   var key=fbKey(camp.account,camp.campaign), b=d.budget;
+  var cx=ctx(), daysLeft=Math.max(0,cx.dim-cx.elapsed), dv=campDailyVal(camp,b), mtd=aggMonth(camp.daily,state.viewMonth).cost;
+  var meta = b.mode==='daily'
+      ? ('Daily budget '+money(dv)+'/day → '+money(mtd)+' spent + '+money(dv)+' × '+daysLeft+' day'+(daysLeft===1?'':'s')+' left = '+money(d.effBudget))
+      : (b.mode==='lastMonth' ? ('Last month spend = '+money(d.effBudget)) : ('Manual monthly budget = '+money(d.effBudget)));
   var box='<div class="fbbudgetbox"><div class="bb-title">'+esc(monthLabel(state.viewMonth))+' budget</div>'
     + '<div class="segment">'
-    + '<button class="'+(b.mode==='manual'?'on':'')+'" data-act="fb-mode" data-key="'+esc(key)+'" data-mode="manual">Set manually</button>'
+    + '<button class="'+(b.mode==='daily'?'on':'')+'" data-act="fb-mode" data-key="'+esc(key)+'" data-mode="daily">Daily budget</button>'
+    + '<button class="'+(b.mode==='manual'?'on':'')+'" data-act="fb-mode" data-key="'+esc(key)+'" data-mode="manual">Set monthly</button>'
     + '<button class="'+(b.mode==='lastMonth'?'on':'')+'" data-act="fb-mode" data-key="'+esc(key)+'" data-mode="lastMonth">Use last month</button>'
-    + '<button class="'+(b.mode==='daily'?'on':'')+'" data-act="fb-mode" data-key="'+esc(key)+'" data-mode="daily">FB daily budget</button>'
     + '</div>'
-    + '<span class="fbmeta">'+(b.mode==='daily'?('FB daily budget '+money(camp.dailyBudget)+' × '+ctx().dim+' days = '+money(d.effBudget)):(b.mode==='lastMonth'?('Last month spend = '+money(d.effBudget)):('Effective '+money(d.effBudget))))+(camp.tags?(' · tags: '+esc(camp.tags)):'')+'</span>'
+    + '<span class="fbmeta">'+esc(meta)+(camp.tags?(' · tags: '+esc(camp.tags)):'')+'</span>'
     + '</div>';
   var charts=fbChartsHTML(camp,d);
   return '<div class="fbdetail">'+box+charts+'</div>';
@@ -563,6 +612,7 @@ function fbFindCamp(account,campaign){
   for(var i=0;i<list.length;i++){ if(list[i].campaign===campaign) return list[i]; }
   return null;
 }
+function fbCampByKey(key){ var p=key.split('||'); return fbFindCamp(p[0], p.slice(1).join('||')); }
 
 // patch just the computed cells for a campaign + its account + totals (keeps input focus)
 function fbPatchKey(key){
@@ -571,11 +621,12 @@ function fbPatchKey(key){
   var camp=fbFindCamp(account,campaign); if(!camp) return;
   var cd=campDerive(camp);
   var crow=document.querySelector('[data-fbrow="'+cssEscFb(key)+'"]');
-  if(crow) patchComputed(crow, cd, isLive);
+  if(crow){ patchComputed(crow, cd, isLive); var mh=crow.querySelector('.fbmohint'); if(mh) mh.textContent=money(cd.effBudget,true)+'/mo'; }
   var acc=fbFindAccount(account);
   var arow=document.querySelector('[data-fbarow="'+cssEscFb(account)+'"]');
   if(acc && arow){ var ad=acctDerive(acc); patchComputed(arow, ad, isLive);
     var ab=arow.querySelector('.fb-abudget'); if(ab) ab.textContent=money(ad.effBudget,true); }
+  fbPatchTotals();
 }
 function patchComputed(row, d, isLive){
   var st=statusOf(d.pace);
@@ -597,7 +648,12 @@ document.addEventListener('click', function(e){
   else if(act==='fb-toggle'){ var acct=el.getAttribute('data-acct'); state.fbOpen[acct]=!state.fbOpen[acct]; render(); }
   else if(act==='fb-camp-toggle'){ if(e.target.closest('[data-noexpand]')) return; var k=el.getAttribute('data-key'); state.fbCampOpen[k]=!state.fbCampOpen[k]; render(); }
   else if(act==='fb-to-manual'){ fbSetBudget(el.getAttribute('data-key'),{mode:'manual',amount:Number(el.getAttribute('data-amt'))||0}); }
-  else if(act==='fb-mode'){ fbSetBudget(el.getAttribute('data-key'),{mode:el.getAttribute('data-mode')}); }
+  else if(act==='fb-mode'){
+    var mkey=el.getAttribute('data-key'), mode=el.getAttribute('data-mode'), patch={mode:mode};
+    if(mode==='daily') patch.amount=0;                                  // start from the sheet's daily budget
+    else if(mode==='manual'){ var mc=fbCampByKey(mkey); if(mc) patch.amount=Math.round(campEffBudget(mc)); } // seed with the current monthly
+    fbSetBudget(mkey,patch);
+  }
   else if(act==='fb-range'){ state.fbDetailDays=parseInt(el.getAttribute('data-days'),10)||30; render(); }
   else if(act==='fb-slack'){ state.fbSlackFor={kind:el.getAttribute('data-kind'),account:el.getAttribute('data-acct'),campaign:el.getAttribute('data-camp')||''}; render(); var n=document.getElementById('fb-slack-note'); if(n) n.focus(); }
   else if(act==='fb-slack-send'){ fbSendSlack(); }
@@ -616,6 +672,17 @@ document.addEventListener('input', function(e){
     try{ el.setSelectionRange(pos,pos); }catch(err){}
     fbSetBudget(key,{mode:'manual',amount:val}, true);   // skip full re-render → keep focus
     fbPatchKey(key);
+  } else if(e.target.classList.contains('fb-daily-input')){
+    var del=e.target, dkey=del.getAttribute('data-key');
+    var ddig=del.value.replace(/[^0-9]/g,'');
+    var dval=ddig===''?0:parseInt(ddig,10);
+    var dbefore=del.value.slice(0,del.selectionStart).replace(/[^0-9]/g,'').length;
+    var dfmt=ddig===''?'':dval.toLocaleString('en-US');
+    del.value=dfmt;
+    var dp=0,ds=0; while(dp<dfmt.length&&ds<dbefore){ if(dfmt.charCodeAt(dp)>=48&&dfmt.charCodeAt(dp)<=57) ds++; dp++; }
+    try{ del.setSelectionRange(dp,dp); }catch(err){}
+    fbSetBudget(dkey,{mode:'daily',amount:dval}, true);  // store the DAILY budget; keep focus
+    fbPatchKey(dkey);
   } else if(e.target.id==='fb-day-input'){
     var v=e.target.value.replace(/[^0-9]/g,'');
     state.elapsedOverride = v===''?null:parseInt(v,10);
