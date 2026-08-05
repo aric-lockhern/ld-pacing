@@ -317,6 +317,14 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 </style>
 </head>
 <body>
+<!-- Boot loader: shown immediately (before JS runs) so the page is never blank
+     while the app initializes and the first data pull is in flight. Removed by
+     hideBoot() once the initial load settles. Inline-styled on purpose. -->
+<div id="boot" style="position:fixed;inset:0;background:#F4F6F8;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity .35s ease;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <div class="spin" style="width:38px;height:38px;border:3px solid #E7EBEF;border-top-color:#3A4FBF;border-radius:50%;margin-bottom:16px;"></div>
+  <div style="font-size:15px;font-weight:650;color:#17232E;letter-spacing:-.01em;">Lockhern — Account Pacing</div>
+  <div style="font-size:12.5px;color:#64717F;margin-top:5px;">Loading your accounts… this can take a moment.</div>
+</div>
 <div class="wrap" id="app"></div>
 
 <script>
@@ -363,9 +371,12 @@ function jsonp(params, timeoutMs){
   });
 }
 
+/* ---- boot loader (the full-screen splash before the first data lands) ---- */
+function hideBoot(){ var el=document.getElementById('boot'); if(!el) return; el.style.opacity='0'; el.style.pointerEvents='none'; setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); }, 380); }
+
 /* ---- load ---- */
 function loadData(){
-  if(WEBAPP_URL.indexOf('http')!==0){ state.source='sample'; state.accounts=SAMPLE; render(); return; }
+  if(WEBAPP_URL.indexOf('http')!==0){ state.source='sample'; state.accounts=SAMPLE; render(); hideBoot(); return; }
   state.source='loading'; render();
   jsonp({ action:'data' }).then(function(res){
     if(!res || !res.ok) throw new Error(res && res.error || 'bad response');
@@ -379,11 +390,11 @@ function loadData(){
     rebuild();
     var stamps = state.accounts.map(function(a){return a.updated;}).filter(Boolean).sort();
     state.feedUpdated = stamps.length ? stamps[stamps.length-1] : '';
-    state.source='live'; render();
+    state.source='live'; render(); hideBoot();
     if(!state._slackFetched){ state._slackFetched=true; jsonp({action:'slackUsers'}).then(function(r){ if(r&&r.ok&&r.users){ state.slackUsers=r.users; render(); } }).catch(function(){}); }
   }).catch(function(){
     state.accounts = SAMPLE; state.rawG=[]; state.rawM=[]; state.groups={}; state.dailyByClient={};
-    state.source='sample'; render();
+    state.source='sample'; render(); hideBoot();
   });
 }
 
@@ -1585,6 +1596,7 @@ var SAMPLE=[
 
 /* go */
 loadData();
+setTimeout(hideBoot, 30000);   // backstop: never let the splash get stuck
 </script>
 <script src="facebook.js"></script>
 </body>
