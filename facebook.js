@@ -310,7 +310,9 @@ FB.render = function(baseHtml){
   var c=ctx(), isLive=c.isLive;
 
   if(state.fbSource==='loading' || state.fbSource==null){
-    html += '<div class="empty">Loading Facebook data from the sheet…</div>';
+    html += (typeof loadingHTML==='function'
+      ? loadingHTML('Loading Facebook…','Pulling campaigns from the sheet. The first load can take a few seconds.')
+      : '<div class="empty">Loading Facebook data from the sheet…</div>');
     document.getElementById('app').innerHTML=html; return;
   }
   if(state.fbSource==='error'){
