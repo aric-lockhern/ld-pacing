@@ -339,11 +339,11 @@ var state = {
 var saveTimers = {};
 
 /* ---- JSONP (works cross-origin, keeps the sheet private) ---- */
-function jsonp(params){
+function jsonp(params, timeoutMs){
   return new Promise(function(resolve, reject){
     var cb = 'cb_' + Math.random().toString(36).slice(2);
     var script = document.createElement('script');
-    var timer = setTimeout(function(){ cleanup(); reject(new Error('timeout')); }, 20000);
+    var timer = setTimeout(function(){ cleanup(); reject(new Error('timeout')); }, timeoutMs||20000);
     function cleanup(){ clearTimeout(timer); try{ delete window[cb]; }catch(e){ window[cb]=undefined; } if(script.parentNode) script.parentNode.removeChild(script); }
     window[cb] = function(data){ cleanup(); resolve(data); };
     var q = Object.assign({}, params, { callback: cb, secret: SECRET });

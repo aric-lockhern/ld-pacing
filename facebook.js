@@ -80,7 +80,9 @@ FB.load = function(force){
   if(!force && state.fbSource==='live') return;
   if(WEBAPP_URL.indexOf('http')!==0){ state.fbSource='sample'; state.fbRaw=[]; FB.rebuild(); render(); return; }
   state.fbSource='loading'; render();
-  jsonp({ action:'fbData' }).then(function(res){
+  // The FB sheet is large; the gateway caches the heavy read, but a cold read
+  // can take a while — allow 60s, and force=refresh bypasses the gateway cache.
+  jsonp({ action:'fbData', fresh: force?'1':'' }, 60000).then(function(res){
     if(!res || !res.ok) throw new Error(res && res.error || 'bad response');
     state.fbRaw = res.rows || [];
     state.fbBudgets = fbBudgetsToMap(res.budgets || []);

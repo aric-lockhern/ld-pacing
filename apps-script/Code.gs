@@ -80,6 +80,8 @@ var RATE_DAYS_G     = 3;   // recent-rate window for the "trending to" line
 var FB_SPREADSHEET_ID = '1ealb9ssXKqspG204VubWJvkbd77A8_jVfege3uUNS20';
 var FB_TAB            = 'FB - Daily';
 var FB_LOOKBACK_DAYS  = 95;                 // trim payload to a rolling window
+var FB_MAX_ROWS       = 120000;             // safety cap on rows read (newest at the bottom)
+var FB_CACHE_SECS     = 300;                // cache the heavy FB read for 5 min
 var FB_BUDGET_TAB     = 'Facebook_Budgets'; // stored in the MAIN (private) sheet
 var FB_BUDGET_HEADER  = ['Account', 'Campaign', 'Month', 'Mode', 'Amount', 'Updated'];
 
@@ -533,22 +535,48 @@ function normDateG(v) {
 // Serve Active-only Facebook rows (trimmed to a rolling window) + FB budgets.
 function fbData(p) {
   requireSecret(p);
-  var rows = readFbRows();
-  var budgets = readTab(FB_BUDGET_TAB).map(function (r) { r.Month = normMonth(r.Month); return r; });
+  var cache = CacheService.getScriptCache();
+  var rows = null;
+  if (p.fresh !== '1') rows = fbCacheGet_(cache, 'fbRows');        // serve cache unless ?fresh=1
+  if (!rows) { rows = readFbRows(); fbCachePut_(cache, 'fbRows', rows, FB_CACHE_SECS); }
+  var budgets = readTab(FB_BUDGET_TAB).map(function (r) { r.Month = normMonth(r.Month); return r; }); // small tab, always fresh
   return { ok: true, rows: rows, budgets: budgets };
+}
+
+// Chunked Script-cache helpers (a cache value maxes at ~100KB, so split).
+function fbCachePut_(cache, key, obj, ttl) {
+  try {
+    var s = JSON.stringify(obj), size = 95000, n = Math.ceil(s.length / size), map = {};
+    if (n > 40) return;                                            // too big to cache; skip silently
+    map[key + '_n'] = String(n);
+    for (var i = 0; i < n; i++) map[key + '_' + i] = s.substring(i * size, (i + 1) * size);
+    cache.putAll(map, ttl);
+  } catch (e) {}
+}
+function fbCacheGet_(cache, key) {
+  try {
+    var nStr = cache.get(key + '_n'); if (!nStr) return null;
+    var n = parseInt(nStr, 10), keys = [];
+    for (var i = 0; i < n; i++) keys.push(key + '_' + i);
+    var got = cache.getAll(keys), s = '';
+    for (var j = 0; j < n; j++) { var part = got[key + '_' + j]; if (part == null) return null; s += part; }
+    return JSON.parse(s);
+  } catch (e) { return null; }
 }
 
 // Read the separate FB spreadsheet, keep only rows flagged Active in column M,
 // and only the last FB_LOOKBACK_DAYS. Columns are matched by header name, so
-// column order can change without breaking this.
+// column order can change without breaking this. Only the last FB_MAX_ROWS rows
+// are read (the export appends by date, so recent data is at the bottom) to
+// bound the read time on very large sheets.
 function readFbRows() {
   var ss = SpreadsheetApp.openById(FB_SPREADSHEET_ID);
   var sheet = ss.getSheetByName(FB_TAB);
   if (!sheet) throw new Error('Facebook tab not found: "' + FB_TAB + '"');
-  var values = sheet.getDataRange().getValues();
-  if (values.length < 2) return [];
+  var lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return [];
 
-  var header = values[0], idx = {};
+  var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0], idx = {};
   for (var j = 0; j < header.length; j++) idx[String(header[j]).trim()] = j;
   function c(name) { return idx[name] == null ? -1 : idx[name]; }
   var iDate = c('Date'), iAcct = c('Account name'), iCamp = c('Campaign name'),
@@ -561,30 +589,36 @@ function readFbRows() {
       iBStart = c('Budget start'), iBEnd = c('Budget end');
   if (iActive < 0) throw new Error('Facebook sheet is missing the "Active" column');
 
+  var startRow = 2, numRows = lastRow - 1;
+  if (numRows > FB_MAX_ROWS) { startRow = lastRow - FB_MAX_ROWS + 1; numRows = FB_MAX_ROWS; }
+  var values = sheet.getRange(startRow, 1, numRows, lastCol).getValues();
+
   var cd = new Date(); cd.setDate(cd.getDate() - FB_LOOKBACK_DAYS);
   var cutoff = cd.getFullYear() + '-' + ('0' + (cd.getMonth() + 1)).slice(-2) + '-' + ('0' + cd.getDate()).slice(-2);
 
   var out = [];
-  for (var i = 1; i < values.length; i++) {
+  for (var i = 0; i < values.length; i++) {
     var r = values[i];
     if (String(r[iActive]).trim() !== 'Active') continue;         // managed-account gate
     var d = normDateG(r[iDate]);
     if (!d || d < cutoff) continue;
-    out.push({
+    var o = {
       d: d,
       a: String(r[iAcct] || '').trim(),
       c: String(r[iCamp] || '').trim(),
-      tg: iTags < 0 ? '' : String(r[iTags] || '').trim(),
       db: iDB < 0 ? 0 : numv(r[iDB]),
       st: iStatus < 0 ? '' : String(r[iStatus] || '').trim(),
       cost: numv(r[iCost]), imp: numv(r[iImp]), clk: numv(r[iClk]),
-      wc: numv(r[iWC]), fl: numv(r[iFL]), val: numv(r[iVal]),
-      life: iLife  < 0 ? 0  : numv(r[iLife]),                         // lifetime budget amount
-      bt:   iBType < 0 ? '' : String(r[iBType]  || '').trim(),        // 'daily' | 'lifetime'
-      bl:   iBLevel< 0 ? '' : String(r[iBLevel] || '').trim(),       // 'campaign' | 'ad set'
-      bs:   iBStart< 0 ? '' : normDateG(r[iBStart]),                  // lifetime flight start
-      be:   iBEnd  < 0 ? '' : normDateG(r[iBEnd])                     // lifetime flight end
-    });
+      wc: numv(r[iWC]), fl: numv(r[iFL]), val: numv(r[iVal])
+    };
+    // Optional fields: only include when non-empty, to keep the payload small.
+    var tg = iTags < 0 ? '' : String(r[iTags] || '').trim(); if (tg) o.tg = tg;
+    if (iLife   >= 0) { var lv = numv(r[iLife]); if (lv) o.life = lv; }
+    if (iBType  >= 0) { var bt = String(r[iBType]  || '').trim(); if (bt) o.bt = bt; }
+    if (iBLevel >= 0) { var bl = String(r[iBLevel] || '').trim(); if (bl) o.bl = bl; }
+    if (iBStart >= 0) { var bs = normDateG(r[iBStart]); if (bs) o.bs = bs; }
+    if (iBEnd   >= 0) { var be = normDateG(r[iBEnd]);   if (be) o.be = be; }
+    out.push(o);
   }
   return out;
 }
