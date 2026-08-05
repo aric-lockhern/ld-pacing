@@ -32,9 +32,11 @@ var FEED_TABS      = ['Google_Feed', 'Microsoft_Feed'];
 var BUDGET_TAB     = 'Budgets';
 var BUDGET_HEADER  = ['Client', 'Month', 'Mode', 'Amount', 'Updated'];
 var GROUP_TAB      = 'Groups';
-var GROUP_HEADER   = ['AccountId', 'Platform', 'Account', 'Group', 'Hidden', 'Type', 'Manager', 'Updated'];
+var GROUP_HEADER   = ['AccountId', 'Platform', 'Account', 'Group', 'Hidden', 'Type', 'Manager', 'Updated', 'Discipline'];
 var DISMISS_TAB    = 'Dismissals';
 var DISMISS_HEADER = ['Client', 'Until', 'Updated'];
+var CHANGELOG_TAB    = 'Changelog';
+var CHANGELOG_HEADER = ['When', 'By', 'Area', 'Action', 'Target', 'Detail'];
 var SLACK_WEBHOOK_URL = 'REDACTED_SET_IN_DEPLOYED_SCRIPT'; // fallback only — real value lives in Script property SLACK_WEBHOOK_URL
 var SLACK_BOT_TOKEN   = 'REDACTED_SET_IN_DEPLOYED_SCRIPT'; // fallback only — real value lives in Script property SLACK_BOT_TOKEN
 
@@ -114,6 +116,10 @@ function doGet(e) {
       out = fbData(p);
     } else if (p.action === 'setFbBudget') {
       out = setFbBudget(p);
+    } else if (p.action === 'setDiscipline') {
+      out = setDiscipline(p);
+    } else if (p.action === 'changelog') {
+      out = changelog(p);
     } else {
       out = { ok: true, service: 'Lockhern pacing gateway' };
     }
@@ -189,6 +195,7 @@ function setBudget(p) {
   sheet.getRange(writeRow, 2).setNumberFormat('@');
   sheet.getRange(writeRow, 2).setValue(month);
 
+  logChange_(p.by, 'Search', 'Budget', client, month + ' · ' + (p.mode === 'lastMonth' ? 'last month' : 'manual') + ' · $' + (Number(p.amount) || 0));
   return { ok: true, row: writeRow, deduped: matches.length > 1 ? matches.length - 1 : 0 };
 }
 
@@ -214,13 +221,14 @@ function upsertMeta(id, platform, account, patch) {
   for (var i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === id) { target = i + 1; existing = values[i]; break; }
   }
-  var group   = (patch.group   !== undefined) ? patch.group   : (existing ? existing[3] : '');
-  var hidden  = (patch.hidden  !== undefined) ? patch.hidden  : (existing ? existing[4] : '');
-  var type    = (patch.type    !== undefined) ? patch.type    : (existing ? existing[5] : '');
-  var manager = (patch.manager !== undefined) ? patch.manager : (existing ? existing[6] : '');
+  var group      = (patch.group      !== undefined) ? patch.group      : (existing ? existing[3] : '');
+  var hidden     = (patch.hidden     !== undefined) ? patch.hidden     : (existing ? existing[4] : '');
+  var type       = (patch.type       !== undefined) ? patch.type       : (existing ? existing[5] : '');
+  var manager    = (patch.manager    !== undefined) ? patch.manager    : (existing ? existing[6] : '');
+  var discipline = (patch.discipline !== undefined) ? patch.discipline : (existing ? existing[8] : '');
   var plat    = platform || (existing ? existing[1] : '');
   var acct    = account  || (existing ? existing[2] : '');
-  var row = [id, plat, acct, String(group || ''), String(hidden || ''), String(type || ''), String(manager || ''), new Date().toISOString()];
+  var row = [id, plat, acct, String(group || ''), String(hidden || ''), String(type || ''), String(manager || ''), new Date().toISOString(), String(discipline || '')];
   var writeRow;
   if (target === -1) { sheet.appendRow(row); writeRow = sheet.getLastRow(); }
   else { writeRow = target; sheet.getRange(writeRow, 1, 1, row.length).setValues([row]); }
@@ -232,27 +240,62 @@ function setManager(p) {
   requireSecret(p);
   var id = String(p.accountId || '').trim();
   if (!id) throw new Error('missing accountId');
-  return upsertMeta(id, p.platform, p.account, { manager: String(p.manager || '') });
+  var res = upsertMeta(id, p.platform, p.account, { manager: String(p.manager || '') });
+  logChange_(p.by, 'Search', 'Manager', p.account || id, String(p.manager || '').split('|')[0] || '(cleared)');
+  return res;
 }
 function setGroup(p) {
   requireSecret(p);
   var id = String(p.accountId || '').trim();
   if (!id) throw new Error('missing accountId');
-  return upsertMeta(id, p.platform, p.account, { group: p.group || '' });
+  var res = upsertMeta(id, p.platform, p.account, { group: p.group || '' });
+  logChange_(p.by, 'Search', p.group ? 'Group / rename' : 'Ungroup', p.account || id, String(p.group || ''));
+  return res;
 }
 function setHidden(p) {
   requireSecret(p);
   var id = String(p.accountId || '').trim();
   if (!id) throw new Error('missing accountId');
   var h = (String(p.hidden) === '1' || String(p.hidden) === 'true') ? '1' : '';
-  return upsertMeta(id, p.platform, p.account, { hidden: h });
+  var res = upsertMeta(id, p.platform, p.account, { hidden: h });
+  logChange_(p.by, 'Search', h ? 'Hide' : 'Unhide', p.account || id, '');
+  return res;
 }
 function setType(p) {
   requireSecret(p);
   var id = String(p.accountId || '').trim();
   if (!id) throw new Error('missing accountId');
   var t = (p.type === 'ecomm' || p.type === 'leadgen') ? p.type : '';
-  return upsertMeta(id, p.platform, p.account, { type: t });
+  var res = upsertMeta(id, p.platform, p.account, { type: t });
+  logChange_(p.by, 'Search', 'Type', p.account || id, t || '(cleared)');
+  return res;
+}
+// Budget discipline: 'strict' (hold to budget) or 'fluid' (over/under is ok).
+function setDiscipline(p) {
+  requireSecret(p);
+  var id = String(p.accountId || '').trim();
+  if (!id) throw new Error('missing accountId');
+  var d = (p.discipline === 'strict' || p.discipline === 'fluid') ? p.discipline : '';
+  var res = upsertMeta(id, p.platform, p.account, { discipline: d });
+  logChange_(p.by, 'Search', 'Budget discipline', p.account || id, d || '(cleared)');
+  return res;
+}
+
+/* ---- change log: every tool-applied change is appended here ---- */
+function logChange_(by, area, action, target, detail) {
+  try {
+    var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    var sheet = ss.getSheetByName(CHANGELOG_TAB) || ss.insertSheet(CHANGELOG_TAB);
+    ensureHeader(sheet, CHANGELOG_HEADER);
+    sheet.appendRow([new Date().toISOString(), String(by || '').slice(0, 60), String(area || ''),
+                     String(action || ''), String(target || '').slice(0, 160), String(detail || '').slice(0, 240)]);
+  } catch (e) {}   // logging must never break the actual write
+}
+function changelog(p) {
+  requireSecret(p);
+  var rows = readTab(CHANGELOG_TAB);
+  var start = Math.max(0, rows.length - 200);
+  return { ok: true, entries: rows.slice(start).reverse() };   // newest first, last 200
 }
 
 /* ---- alert dismissals (Client → Until date) ---- */
@@ -272,6 +315,7 @@ function setDismiss(p) {
   else sheet.getRange(target, 1, 1, row.length).setValues([row]);
   sheet.getRange(target, 2).setNumberFormat('@');
   sheet.getRange(target, 2).setValue(until);
+  logChange_(p.by, 'Search', until ? 'Dismiss alert' : 'Restore alert', client, until ? ('until ' + until) : '');
   return { ok: true };
 }
 
@@ -640,12 +684,13 @@ function setFbBudget(p) {
   for (var i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === account && String(values[i][1]).trim() === campaign && normMonth(values[i][2]) === month) { target = i + 1; break; }
   }
-  var mode = (p.mode === 'lastMonth' || p.mode === 'daily') ? p.mode : 'manual';
+  var mode = (p.mode === 'lastMonth' || p.mode === 'daily' || p.mode === 'auto' || p.mode === 'lifetime') ? p.mode : 'manual';
   var row = [account, campaign, month, mode, Number(p.amount) || 0, new Date().toISOString()];
   if (target === -1) { sheet.appendRow(row); target = sheet.getLastRow(); }
   else sheet.getRange(target, 1, 1, row.length).setValues([row]);
   sheet.getRange(target, 3).setNumberFormat('@');   // keep Month as text
   sheet.getRange(target, 3).setValue(month);
+  logChange_(p.by, 'Social', 'Campaign budget', account + (campaign ? (' · ' + campaign) : ''), month + ' · ' + mode + (Number(p.amount) ? (' · $' + (Number(p.amount) || 0)) : ''));
   return { ok: true, row: target };
 }
 

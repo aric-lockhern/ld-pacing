@@ -78,6 +78,9 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .selcount{font-size:13px;font-weight:600;color:#2A3670;margin-right:2px;}
 .btn.sm{padding:5px 10px;font-size:12px;}
 .tag.hiddentag{color:var(--faint);background:var(--line2);}
+.tag.disc{text-transform:capitalize;}
+.tag.disc.strict{color:var(--over);background:var(--over-bg);}
+.tag.disc.fluid{color:var(--muted);background:var(--line2);}
 .typeseg{display:inline-flex;background:#EEF1F4;border-radius:8px;padding:2px;gap:2px;}
 .typeseg button{border:none;background:none;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;}
 .typeseg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(20,30,45,.12);}
@@ -332,7 +335,8 @@ var ACTIVE_LABEL = 'active';
 /* ---- state ---- */
 var state = {
   accounts: [], budgets: {}, open: {}, dailyByClient: {},
-  rawG: [], rawM: [], rawDailyG: [], rawDailyM: [], groups: {}, hidden: {}, types: {}, managers: {}, team: [], slackUsers: [], dismiss: {}, selected: {},
+  rawG: [], rawM: [], rawDailyG: [], rawDailyM: [], groups: {}, hidden: {}, types: {}, managers: {}, discipline: {}, team: [], slackUsers: [], dismiss: {}, selected: {},
+  changelog: null, changelogLoading: false,
   view: 'pacing', showAll: false, showHidden: false, filterIssues: false, filterWins: false, detailDays: 30, slackFor: null,
   viewMonth: monthKey(new Date()),
   liveKey: monthKey(new Date()),
@@ -351,6 +355,7 @@ function jsonp(params, timeoutMs){
     function cleanup(){ clearTimeout(timer); try{ delete window[cb]; }catch(e){ window[cb]=undefined; } if(script.parentNode) script.parentNode.removeChild(script); }
     window[cb] = function(data){ cleanup(); resolve(data); };
     var q = Object.assign({}, params, { callback: cb, secret: SECRET });
+    if((params.action||'').indexOf('set')===0) q.by = lsGet('lk_slackname','');   // stamp who made the change
     var qs = Object.keys(q).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(q[k]); }).join('&');
     script.src = WEBAPP_URL + '?' + qs;
     script.onerror = function(){ cleanup(); reject(new Error('network')); };
@@ -389,7 +394,7 @@ function splitLabels(s){ return String(s||'').split(/[|,;]/).map(function(x){ret
 function effClient(row){ var id=String(row.AccountId||'').trim(); return (state.groups[id] || row.Client || row.Account || '').trim(); }
 function idsFor(members,plat){ return members.filter(function(m){return m.platform===plat;}).map(function(m){return m.name;}).join(', '); }
 function groupsToMap(rows){
-  state.hidden={}; state.types={}; state.managers={};
+  state.hidden={}; state.types={}; state.managers={}; state.discipline={};
   var out={};
   (rows||[]).forEach(function(r){
     var id=String(r.AccountId||'').trim(); if(!id) return;
@@ -397,6 +402,7 @@ function groupsToMap(rows){
     if(String(r.Hidden||'').trim()==='1') state.hidden[id]=true;
     var t=String(r.Type||'').trim(); if(t==='ecomm'||t==='leadgen') state.types[id]=t;
     var mg=String(r.Manager||'').trim(); if(mg) state.managers[id]=mg;
+    var dc=String(r.Discipline||'').trim().toLowerCase(); if(dc==='strict'||dc==='fluid') state.discipline[id]=dc;
   });
   return out;
 }
@@ -429,6 +435,15 @@ function setTypeClient(a, type){
         .catch(function(){ if(--pending<=0){ state.save='idle'; updateSaveInd(); } });
     });
   }
+}
+// Budget discipline: 'strict' (hold to budget) or 'fluid' (over/under ok). Blank = unset.
+function accountDiscipline(a){ if(a.members) for(var i=0;i<a.members.length;i++){ var d=state.discipline[a.members[i].accountId]; if(d) return d; } return ''; }
+function setDisciplineClient(a, value){
+  (a.members||[]).forEach(function(m){ if(value) state.discipline[m.accountId]=value; else delete state.discipline[m.accountId]; });
+  render();
+  if(state.source==='live') (a.members||[]).forEach(function(m){
+    jsonp({action:'setDiscipline',accountId:m.accountId,platform:m.platform,account:m.name,discipline:value}).catch(function(){});
+  });
 }
 function dismissToMap(rows){ var out={}; (rows||[]).forEach(function(r){ var c=String(r.Client||'').trim(), u=normDate(r.Until); if(c&&u) out[c]=u; }); return out; }
 function rebuild(){ state.accounts=buildAccounts(state.rawG,state.rawM); state.dailyByClient=buildDaily(state.rawDailyG,state.rawDailyM); }
@@ -762,7 +777,33 @@ function settingsHTML(){
       + '<option value="issue"'+(sp==='issue'?' selected':'')+'>By issues first</option></select></div>'
     + '<div class="setactions"><button class="btn primary" data-act="save-settings">Save &amp; reconnect</button>'
     + '<span class="setstate '+(connected?'ok':'')+'">'+(connected?'Connected':'Not set')+'</span></div>'
-    + '<p class="setnote">Saved in your browser. Note: the URL you set here only applies to <b>this</b> browser — to set it for the whole team, bake it into <code>DEFAULT_WEBAPP_URL</code> at the top of the file before hosting. The <b>90-day window</b> lives in the Google &amp; Bing scripts (LOOKBACK_DAYS).</p></div>';
+    + '<p class="setnote">Saved in your browser. Note: the URL you set here only applies to <b>this</b> browser — to set it for the whole team, bake it into <code>DEFAULT_WEBAPP_URL</code> at the top of the file before hosting. The <b>90-day window</b> lives in the Google &amp; Bing scripts (LOOKBACK_DAYS).</p>'
+    + changelogHTML()
+    + '</div>';
+}
+/* ---- change log: recent changes applied through the tool ---- */
+function changelogHTML(){
+  var whoNote = lsGet('lk_slackname','') ? '' : ' Set your name in a Slack note so changes are attributed to you.';
+  var head='<h3 style="margin-top:26px">Change log <button class="btn sm" data-act="changelog-refresh" style="margin-left:8px;font-weight:600">↻ Refresh</button></h3>';
+  if(state.changelogLoading) return head+loadingHTML('Loading change log…');
+  if(state.changelog==null) return head+'<p class="setnote">Recent budget and account changes made in the tool.'+whoNote+'</p>';
+  if(!state.changelog.length) return head+'<p class="setnote">No changes logged yet.'+whoNote+'</p>';
+  var rows=state.changelog.map(function(e){
+    var when=String(e.When||'').replace('T',' ').slice(0,16);
+    var by=String(e.By||'').trim()||'—';
+    return '<tr><td>'+esc(when)+'</td><td>'+esc(by)+'</td><td>'+esc(String(e.Area||''))+'</td><td>'+esc(String(e.Action||''))+'</td><td>'+esc(String(e.Target||''))+'</td><td>'+esc(String(e.Detail||''))+'</td></tr>';
+  }).join('');
+  return head+'<div class="bd-wrap" style="margin-top:6px"><table class="bd"><thead><tr><th>When</th><th>By</th><th>Area</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+    + '<p class="setnote">Last '+state.changelog.length+' change'+(state.changelog.length===1?'':'s')+' (newest first).'+whoNote+'</p>';
+}
+function loadChangelog(){
+  if(WEBAPP_URL.indexOf('http')!==0){ state.changelog=[]; if(state.view==='settings') render(); return; }
+  state.changelogLoading=true; if(state.view==='settings') render();
+  jsonp({action:'changelog'}).then(function(r){
+    state.changelogLoading=false;
+    state.changelog=(r&&r.ok&&r.entries)?r.entries:[];
+    if(state.view==='settings') render();
+  }).catch(function(){ state.changelogLoading=false; state.changelog=[]; if(state.view==='settings') render(); });
 }
 function saveSettings(){
   var u=document.getElementById('set-url'), s=document.getElementById('set-secret'), so=document.getElementById('set-sort');
@@ -954,6 +995,7 @@ function rowHTML(a,isLive){
   var d=derive(a), st=statusOf(d.pace), b=d.budget, opn=!!state.open[a.client], cl=function(v){return isLive?v:'—';};
   var al=alertFor(a);
   var ty=accountType(a);
+  var dc=accountDiscipline(a);
   var carried = b.inherited ? '<span class="carried" title="Carried over from '+esc(monthLabel(b.from))+' — edit to set for this month">↩</span>' : '';
   var budgetCell = carried + (b.mode==='lastMonth'
     ? '<button class="lmbudget" data-act="to-manual" data-client="'+esc(a.client)+'" data-amt="'+Math.round(d.lastMoTotal)+'" title="Using last month\u2019s spend — click to set a manual amount">'+money(d.effBudget)+' <span class="lm">LM</span></button>'
@@ -968,6 +1010,7 @@ function rowHTML(a,isLive){
       + '<span class="tag">'+(a.hasG?'G':'')+(a.hasG&&a.hasM?'·':'')+(a.hasM?'M':'')+'</span>'
       + (a.grouped?'<span class="tag flat" title="Google + Bing grouped as one client">linked</span>':'')
       + '<span class="tag flat">'+(ty==='ecomm'?'ecom':'lead')+'</span>'
+      + (dc?'<span class="tag disc '+dc+'" title="'+(dc==='strict'?'Strict budget — hold to it':'Fluid budget — over/under is ok')+'">'+dc+'</span>':'')
       + (a.hidden?'<span class="tag hiddentag">hidden</span>':'')+'</span></div>'
     + '<div class="c-num strong cell-mtd">'+cl(money(d.mtd,true))+'</div>'
     + '<div class="c-num cell-forecast">'+cl(money(d.forecast,true))+'</div>'
@@ -986,6 +1029,7 @@ function rowHTML(a,isLive){
       + '<div class="ed-actions">'
       + (a.updated&&a.updated!=='sample'?'<span class="upd">updated '+esc(String(a.updated).replace('T',' ').slice(0,16))+'</span>':'')
       + '<div class="typeseg"><button class="'+(ty==='leadgen'?'on':'')+'" data-act="type-lead" data-client="'+esc(a.client)+'">Lead gen</button><button class="'+(ty==='ecomm'?'on':'')+'" data-act="type-ecom" data-client="'+esc(a.client)+'">E-comm</button></div>'
+      + '<div class="typeseg" title="Strict = hold to budget · Fluid = over/under is ok"><button class="'+(dc==='fluid'?'on':'')+'" data-act="disc-fluid" data-client="'+esc(a.client)+'">Fluid</button><button class="'+(dc==='strict'?'on':'')+'" data-act="disc-strict" data-client="'+esc(a.client)+'">Strict</button></div>'
       + '<label class="mgr-wrap">Mgr <select class="mgr-select" data-client="'+esc(a.client)+'"><option value="">—</option>'
         + (function(){ var raw=accountManager(a), cid=mgrId(raw), roster=rosterList(), seen=false;
             var opts=roster.map(function(t){ var sel=cid&&cid===t.id; if(sel) seen=true; return '<option value="'+esc(t.name+'|'+t.id)+'"'+(sel?' selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
@@ -1239,6 +1283,7 @@ var BURN_WARN_DAYS=2;     // runs dry this many days early → warning
 var BURN_CRIT_DAYS=5;     //  … → critical
 function burnInfo(a,d){
   if(!ctx().isLive) return null;
+  if(accountDiscipline(a)==='fluid') return null;   // fluid budgets: over/under isn't flagged as an issue
   var r=recentPace(a,d);
   if(!r.ok || r.daysLeft<2 || r.days<3 || !(r.budget>=BURN_MIN_BUDGET)) return null;
   if(r.remaining<=0){
@@ -1449,7 +1494,8 @@ document.addEventListener('click', function(e){
   else if(act==='refresh'){ loadData(); }
   else if(act==='tab-pacing'){ state.view='pacing'; render(); }
   else if(act==='tab-facebook'){ state.view='facebook'; render(); if(window.FB) FB.load(); }
-  else if(act==='tab-settings'){ state.view='settings'; render(); }
+  else if(act==='tab-settings'){ state.view='settings'; render(); if(state.changelog==null && !state.changelogLoading) loadChangelog(); }
+  else if(act==='changelog-refresh'){ loadChangelog(); }
   else if(act==='dismiss-remind'){ lsSet('lk_budget_reminder', state.liveKey); render(); }
   else if(act==='save-settings'){ saveSettings(); }
   else if(act==='toggle-all'){ state.showAll=!state.showAll; render(); }
@@ -1463,6 +1509,8 @@ document.addEventListener('click', function(e){
   else if(act==='rename'){ var ar=accountByClient(client); if(ar) renameClient(ar); }
   else if(act==='type-lead'){ var tl=accountByClient(client); if(tl) setTypeClient(tl,'leadgen'); }
   else if(act==='type-ecom'){ var te=accountByClient(client); if(te) setTypeClient(te,'ecomm'); }
+  else if(act==='disc-fluid'){ var df=accountByClient(client); if(df) setDisciplineClient(df, accountDiscipline(df)==='fluid'?'':'fluid'); }
+  else if(act==='disc-strict'){ var ds=accountByClient(client); if(ds) setDisciplineClient(ds, accountDiscipline(ds)==='strict'?'':'strict'); }
   else if(act==='hide'){ var ah=accountByClient(client); if(ah) hideClient(ah,true); }
   else if(act==='unhide'){ var au=accountByClient(client); if(au) hideClient(au,false); }
   else if(act==='dismiss1'){ var a1=accountByClient(client); if(a1) dismissClient(a1,0); }

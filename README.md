@@ -11,6 +11,17 @@ budgets. Live at **https://pacing.lockherndigital.com**.
 | `apps-script/Code.gs` | The "gateway" — reads/writes the private Google Sheet, posts Slack alerts. | **Google Apps Script** (deployed separately as a web app). Kept here for version control only; secrets are redacted. |
 | `netlify.toml` | Netlify build/publish config. | Netlify. |
 
+**Budget discipline (Search):** each client can be marked **Strict** (hold to
+budget) or **Fluid** (over/under is ok) in the expanded row. Fluid clients don't
+raise budget/burn *Issues* (their pace still shows). Stored in a `Discipline`
+column the gateway adds to the `Groups` tab automatically.
+
+**Change log:** every change made through the tool (budgets, budget mode, type,
+manager, group/rename, hide, dismiss, discipline) is appended to a `Changelog`
+tab (When · By · Area · Action · Target · Detail) and shown under **Settings →
+Change log**. "By" is the name set for Slack notes. Both are auto-created; no
+manual sheet setup needed, but the gateway must be redeployed.
+
 The front-end talks to the Apps Script gateway over JSONP, so the Google Sheet
 stays private. Netlify only ever serves `index.html`.
 
