@@ -29,6 +29,7 @@ state.fbAccounts    = state.fbAccounts || [];
 state.fbCampaignsBy = state.fbCampaignsBy || {};
 state.fbRaw         = state.fbRaw || [];
 state.fbSlackFor    = state.fbSlackFor || null;
+if(state.fbFilter==null) state.fbFilter='';
 if(state.fbSave==null)       state.fbSave='idle';
 if(state.fbDetailDays==null) state.fbDetailDays=30;
 /* state.fbSource stays undefined until the first load */
@@ -321,6 +322,8 @@ FB.render = function(baseHtml){
   }
 
   var accounts=(state.fbAccounts||[]).filter(function(a){ return acctVisibleCampaigns(a).length>0; });
+  var fq=(state.fbFilter||'').trim().toLowerCase();
+  if(fq) accounts=accounts.filter(function(a){ return a.account.toLowerCase().indexOf(fq)>=0; });
   // summary
   var t={mtd:0,forecast:0,budget:0,proj:0,wc:0,fl:0,val:0};
   accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); t.wc+=d.wc; t.fl+=d.fl; t.val+=d.val; });
@@ -338,13 +341,19 @@ FB.render = function(baseHtml){
     + '</div></div></div>';
 
   // toolbar
-  html += '<div class="toolbar"><div class="tcount">Accounts <span class="badge">'+accounts.length+'</span>'
+  html += '<div class="toolbar"><div class="tcount">'
+    + '<label class="acctfilter" title="Filter accounts by name"><span class="afic">🔎</span><input id="fb-acct-filter" placeholder="Filter accounts…" value="'+esc(state.fbFilter||'')+'">'+(state.fbFilter?'<button class="afclr" data-act="fb-clear-filter" title="Clear">×</button>':'')+'</label>'
+    + 'Accounts <span class="badge">'+accounts.length+'</span>'
     + '<span class="filtertag" title="Hidden: campaigns with 0 impressions this month, and paused campaigns with 0 spend this month.">Active + campaigns with data</span></div>'
     + '<div class="tactions">'
     + (isLive?('<label class="dayctl">Day <input class="dayin" id="fb-day-input" inputmode="numeric" value="'+c.elapsed+'"> of '+c.dim+' <span class="daypct">· '+Math.round(c.elapsed/c.dim*100)+'%</span></label>'):'')
     + '<span class="saveind '+state.fbSave+'" id="fb-saveind">'+fbSaveText()+'</span>'
     + '<button class="btn" data-act="fb-refresh">↻ Refresh</button></div></div>';
 
+  if(!accounts.length && fq){
+    html += '<div class="empty"><p class="empty-head">No accounts match “'+esc(state.fbFilter)+'”</p><button class="btn" data-act="fb-clear-filter">Clear filter</button></div>';
+    document.getElementById('app').innerHTML=html; return;
+  }
   if(!accounts.length){
     html += '<div class="empty"><p class="empty-head">No Facebook accounts</p>'
       + '<p class="empty-sub">No rows in <b>FB - Daily</b> are flagged <b>Active</b> in column M, or the sheet is empty. Mark the accounts you manage, then refresh.</p>'
@@ -725,6 +734,7 @@ document.addEventListener('click', function(e){
   var el=e.target.closest('[data-act]'); if(!el) return;
   var act=el.getAttribute('data-act');
   if(act==='fb-refresh'){ FB.load(true); }
+  else if(act==='fb-clear-filter'){ state.fbFilter=''; render(); var fce=document.getElementById('fb-acct-filter'); if(fce) fce.focus(); }
   else if(act==='fb-toggle'){ var acct=el.getAttribute('data-acct'); state.fbOpen[acct]=!state.fbOpen[acct]; render(); }
   else if(act==='fb-camp-toggle'){ if(e.target.closest('[data-noexpand]')) return; var k=el.getAttribute('data-key'); state.fbCampOpen[k]=!state.fbCampOpen[k]; render(); }
   else if(act==='fb-to-manual'){ fbSetBudget(el.getAttribute('data-key'),{mode:'manual',amount:Number(el.getAttribute('data-amt'))||0}); }
@@ -778,6 +788,12 @@ document.addEventListener('input', function(e){
     state.elapsedOverride = v===''?null:parseInt(v,10);
     saveElapsed(state.elapsedOverride);
     render();
+  } else if(e.target.id==='fb-acct-filter'){
+    state.fbFilter=e.target.value;
+    var fpos=e.target.selectionStart;
+    render();
+    var fel=document.getElementById('fb-acct-filter');
+    if(fel){ fel.focus(); try{ fel.setSelectionRange(fpos,fpos); }catch(err){} }
   }
 });
 })();

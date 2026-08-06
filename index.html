@@ -48,7 +48,13 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .pace-plan{display:flex;align-items:center;gap:7px;color:var(--accent);font-size:13px;font-weight:600;padding-top:6px;}
 
 .toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;position:relative;gap:12px;flex-wrap:wrap;}
-.tcount{font-size:14px;font-weight:600;color:var(--muted);display:flex;align-items:center;gap:10px;}
+.tcount{font-size:14px;font-weight:600;color:var(--muted);display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.acctfilter{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:5px 9px;}
+.acctfilter:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
+.acctfilter .afic{font-size:12px;opacity:.7;}
+.acctfilter input{border:none;outline:none;background:transparent;font-size:13px;font-weight:500;font-family:inherit;color:var(--ink);width:160px;}
+.acctfilter .afclr{cursor:pointer;color:var(--faint);font-size:15px;line-height:1;border:none;background:none;padding:0 2px;}
+.acctfilter .afclr:hover{color:var(--ink);}
 .badge{display:inline-block;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:1px 9px;font-size:12px;font-variant-numeric:tabular-nums;}
 .filtertag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-bg);border-radius:20px;padding:2px 9px;}
 .tactions{display:flex;align-items:center;gap:9px;}
@@ -346,6 +352,7 @@ var state = {
   rawG: [], rawM: [], rawDailyG: [], rawDailyM: [], groups: {}, hidden: {}, types: {}, managers: {}, discipline: {}, team: [], slackUsers: [], dismiss: {}, selected: {},
   changelog: null, changelogLoading: false,
   view: 'pacing', showAll: false, showHidden: false, filterIssues: false, filterWins: false, detailDays: 30, slackFor: null,
+  filter: '', reminderDismissed: {},
   viewMonth: monthKey(new Date()),
   liveKey: monthKey(new Date()),
   elapsedOverride: loadElapsed(),
@@ -387,6 +394,7 @@ function loadData(){
     state.team = teamToList(res.team||[]);
     state.dismiss = dismissToMap(res.dismissals||[]);
     state.budgets = budgetsToMap(res.budgets||[]);
+    state.reminderDismissed={}; (res.remindersDismissed||[]).forEach(function(m){ if(m) state.reminderDismissed[m]=true; });
     rebuild();
     var stamps = state.accounts.map(function(a){return a.updated;}).filter(Boolean).sort();
     state.feedUpdated = stamps.length ? stamps[stamps.length-1] : '';
@@ -452,9 +460,15 @@ function accountDiscipline(a){ if(a.members) for(var i=0;i<a.members.length;i++)
 function setDisciplineClient(a, value){
   (a.members||[]).forEach(function(m){ if(value) state.discipline[m.accountId]=value; else delete state.discipline[m.accountId]; });
   render();
-  if(state.source==='live') (a.members||[]).forEach(function(m){
-    jsonp({action:'setDiscipline',accountId:m.accountId,platform:m.platform,account:m.name,discipline:value}).catch(function(){});
-  });
+  if(state.source==='live'){
+    state.save='saving'; updateSaveInd();
+    var pending=(a.members||[]).length; if(!pending){ state.save='idle'; updateSaveInd(); return; }
+    (a.members||[]).forEach(function(m){
+      jsonp({action:'setDiscipline',accountId:m.accountId,platform:m.platform,account:m.name,discipline:value})
+        .then(function(){ if(--pending<=0){ state.save='saved'; updateSaveInd(); setTimeout(function(){state.save='idle';updateSaveInd();},1200); } })
+        .catch(function(){ if(--pending<=0){ state.save='idle'; updateSaveInd(); } });
+    });
+  }
 }
 function dismissToMap(rows){ var out={}; (rows||[]).forEach(function(r){ var c=String(r.Client||'').trim(), u=normDate(r.Until); if(c&&u) out[c]=u; }); return out; }
 function rebuild(){ state.accounts=buildAccounts(state.rawG,state.rawM); state.dailyByClient=buildDaily(state.rawDailyG,state.rawDailyM); }
@@ -675,6 +689,8 @@ function visibleAccounts(){
     if(anyLabels && !state.showAll && !isActive(a)) return false;
     return true;
   });
+  var q=(state.filter||'').trim().toLowerCase();
+  if(q) list=list.filter(function(a){ return a.client.toLowerCase().indexOf(q)>=0; });
   if(state.filterIssues) list=list.filter(function(a){ return alertFor(a).flagged; });
   if(state.filterWins) list=list.filter(function(a){ return alertFor(a).positive; });
   return { list:list, anyLabels:anyLabels };
@@ -767,7 +783,8 @@ function topbarHTML(){
    Dismissal is per-month, so it comes back when the next month begins. */
 function budgetReminderHTML(){
   if(state.viewMonth!==state.liveKey) return '';                 // only on the live month
-  if(lsGet('lk_budget_reminder','')===state.liveKey) return '';  // dismissed for this month
+  if(state.reminderDismissed[state.liveKey]) return '';          // dismissed team-wide (saved to the sheet)
+  if(lsGet('lk_budget_reminder','')===state.liveKey) return '';  // or dismissed in this browser
   return '<div class="banner plan"><span>📅 New month — review and update <b>'+esc(monthLabel(state.liveKey))+'</b> budgets across Search and Social. Budgets carry over from last month until you change them.</span><button data-act="dismiss-remind">Dismiss</button></div>';
 }
 // Centered spinner + message — shown while a tab is fetching from the gateway.
@@ -870,7 +887,9 @@ function render(){
   var issueCount=0, critCount=0, winCount=0;
   state.accounts.forEach(function(a){ if(a.hidden) return; var l=alertFor(a); if(l.level==='critical'){critCount++;issueCount++;} else if(l.level==='warning'){issueCount++;} else if(l.level==='positive'){winCount++;} });
   var manualHidden=0; state.accounts.forEach(function(a){ if(a.hidden) manualHidden++; });
-  html+='<div class="toolbar"><div class="tcount">Accounts <span class="badge">'+list.length+'</span>'
+  html+='<div class="toolbar"><div class="tcount">'
+      + '<label class="acctfilter" title="Filter accounts by name"><span class="afic">🔎</span><input id="acct-filter" placeholder="Filter accounts…" value="'+esc(state.filter||'')+'">'+(state.filter?'<button class="afclr" data-act="clear-filter" title="Clear">×</button>':'')+'</label>'
+      + 'Accounts <span class="badge">'+list.length+'</span>'
       + '<button class="filtertag'+(state.showAll?' on':'')+'" data-act="toggle-all">🏷 '+(state.showAll?'Showing all':'Active only')+'</button>'
       + ((issueCount>0||state.filterIssues)?('<button class="filtertag issues'+(state.filterIssues?' on':'')+(critCount?' hascrit':'')+'" data-act="toggle-issues">'+(critCount?'🚨':'⚠')+' Issues ('+issueCount+')</button>'):'')
       + ((winCount>0||state.filterWins)?('<button class="filtertag wins'+(state.filterWins?' on':'')+'" data-act="toggle-wins">▲ Wins ('+winCount+')</button>'):'')
@@ -896,6 +915,9 @@ function render(){
   /* table */
   if(state.source==='loading'){
     html+=loadingHTML('Refreshing…','Pulling the latest numbers from the sheet.');
+  } else if(list.length===0 && state.filter){
+    html+='<div class="empty"><p class="empty-head">No accounts match “'+esc(state.filter)+'”</p>'
+        + '<button class="btn" data-act="clear-filter">Clear filter</button></div>';
   } else if(list.length===0){
     html+='<div class="empty"><p class="empty-head">'+(vis.anyLabels?'No active accounts':'No accounts yet')+'</p>'
         + '<p class="empty-sub">'+(vis.anyLabels?'No accounts are labelled “Active”. Apply the Active account label in Google Ads, then refresh.':'The feed is empty — run the Google Ads script, then refresh.')+'</p>'
@@ -1507,7 +1529,7 @@ document.addEventListener('click', function(e){
   else if(act==='tab-facebook'){ state.view='facebook'; render(); if(window.FB) FB.load(); }
   else if(act==='tab-settings'){ state.view='settings'; render(); if(state.changelog==null && !state.changelogLoading) loadChangelog(); }
   else if(act==='changelog-refresh'){ loadChangelog(); }
-  else if(act==='dismiss-remind'){ lsSet('lk_budget_reminder', state.liveKey); render(); }
+  else if(act==='dismiss-remind'){ lsSet('lk_budget_reminder', state.liveKey); state.reminderDismissed[state.liveKey]=true; if(state.source==='live') jsonp({action:'setReminderDismiss',month:state.liveKey}).catch(function(){}); render(); }
   else if(act==='save-settings'){ saveSettings(); }
   else if(act==='toggle-all'){ state.showAll=!state.showAll; render(); }
   else if(act==='toggle-issues'){ state.filterIssues=!state.filterIssues; state.filterWins=false; render(); }
@@ -1536,6 +1558,7 @@ document.addEventListener('click', function(e){
   else if(act==='bulk-lm'){ bulkLastMonth(); }
   else if(act==='ungroup'){ ungroupSelected(); }
   else if(act==='clearsel'){ state.selected={}; render(); }
+  else if(act==='clear-filter'){ state.filter=''; render(); var fi=document.getElementById('acct-filter'); if(fi) fi.focus(); }
   else if(act==='carryover'){ carryOverAll(); }
   else if(act==='copyprev'){ copyPrev(); }
   else if(act==='toggle'){ if(e.target.closest('[data-noexpand]')) return; state.open[client]=!state.open[client]; render(); }
@@ -1575,6 +1598,12 @@ document.addEventListener('input', function(e){
     state.elapsedOverride = v===''?null:parseInt(v,10);
     saveElapsed(state.elapsedOverride);
     visibleAccounts().list.forEach(function(a){ updateComputed(a.client); });
+  } else if(e.target.id==='acct-filter'){
+    state.filter=e.target.value;
+    var pos=e.target.selectionStart;
+    render();
+    var el=document.getElementById('acct-filter');
+    if(el){ el.focus(); try{ el.setSelectionRange(pos,pos); }catch(err){} }
   }
 });
 

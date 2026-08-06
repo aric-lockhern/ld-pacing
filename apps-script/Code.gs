@@ -37,6 +37,8 @@ var DISMISS_TAB    = 'Dismissals';
 var DISMISS_HEADER = ['Client', 'Until', 'Updated'];
 var CHANGELOG_TAB    = 'Changelog';
 var CHANGELOG_HEADER = ['When', 'By', 'Area', 'Action', 'Target', 'Detail'];
+var REMIND_TAB       = 'Reminders';                      // team-wide "budget reminder dismissed" per month
+var REMIND_HEADER    = ['Month', 'By', 'When'];
 var SLACK_WEBHOOK_URL = 'REDACTED_SET_IN_DEPLOYED_SCRIPT'; // fallback only — real value lives in Script property SLACK_WEBHOOK_URL
 var SLACK_BOT_TOKEN   = 'REDACTED_SET_IN_DEPLOYED_SCRIPT'; // fallback only — real value lives in Script property SLACK_BOT_TOKEN
 
@@ -95,6 +97,7 @@ function doGet(e) {
       requireSecret(p);
       var budgets = readTab(BUDGET_TAB).map(function (r) { r.Month = normMonth(r.Month); return r; });
       out = { ok: true, feeds: readFeeds(), budgets: budgets, groups: readTab(GROUP_TAB), dismissals: readTab(DISMISS_TAB), team: readTab('Team'),
+              remindersDismissed: readTab(REMIND_TAB).map(function (r) { return normMonth(r.Month); }).filter(Boolean),
               dailies: { Daily_Google: readTab('Daily_Google').concat(readTab('Daily_Google_WL')), Daily_Microsoft: readTab('Daily_Microsoft').concat(readTab('Daily_Microsoft_WL')) } };
     } else if (p.action === 'setBudget') {
       out = setBudget(p);
@@ -120,6 +123,8 @@ function doGet(e) {
       out = setDiscipline(p);
     } else if (p.action === 'changelog') {
       out = changelog(p);
+    } else if (p.action === 'setReminderDismiss') {
+      out = setReminderDismiss(p);
     } else {
       out = { ok: true, service: 'Lockhern pacing gateway' };
     }
@@ -296,6 +301,22 @@ function changelog(p) {
   var rows = readTab(CHANGELOG_TAB);
   var start = Math.max(0, rows.length - 200);
   return { ok: true, entries: rows.slice(start).reverse() };   // newest first, last 200
+}
+// Dismiss the "update this month's budgets" reminder for the whole team.
+function setReminderDismiss(p) {
+  requireSecret(p);
+  var month = normMonth(p.month);
+  if (!month) throw new Error('missing month');
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sheet = ss.getSheetByName(REMIND_TAB) || ss.insertSheet(REMIND_TAB);
+  ensureHeader(sheet, REMIND_HEADER);
+  var values = sheet.getDataRange().getValues();
+  for (var i = 1; i < values.length; i++) { if (normMonth(values[i][0]) === month) return { ok: true, already: true }; }
+  sheet.appendRow([month, String(p.by || '').slice(0, 60), new Date().toISOString()]);
+  var r = sheet.getLastRow();
+  sheet.getRange(r, 1).setNumberFormat('@'); sheet.getRange(r, 1).setValue(month);
+  logChange_(p.by, 'Tool', 'Dismiss month reminder', month, '');
+  return { ok: true };
 }
 
 /* ---- alert dismissals (Client → Until date) ---- */
