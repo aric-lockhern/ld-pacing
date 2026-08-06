@@ -780,11 +780,15 @@ function topbarHTML(){
   return '<div class="topbar"><div class="topcluster" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'+brand+channels+monthnav+'</div>'+settings+'</div>';
 }
 /* New-month reminder: nag to update this month's budgets until dismissed.
-   Dismissal is per-month, so it comes back when the next month begins. */
+   Dismissal is per-month (team-wide via the sheet + a local fallback), so it
+   comes back when the next month begins. The same dismissal also hides the
+   "budgets carried over" banner — they're the same nag. */
+function monthReminderDismissed(){
+  return !!state.reminderDismissed[state.liveKey] || lsGet('lk_budget_reminder','')===state.liveKey;
+}
 function budgetReminderHTML(){
   if(state.viewMonth!==state.liveKey) return '';                 // only on the live month
-  if(state.reminderDismissed[state.liveKey]) return '';          // dismissed team-wide (saved to the sheet)
-  if(lsGet('lk_budget_reminder','')===state.liveKey) return '';  // or dismissed in this browser
+  if(monthReminderDismissed()) return '';
   return '<div class="banner plan"><span>📅 New month — review and update <b>'+esc(monthLabel(state.liveKey))+'</b> budgets across Search and Social. Budgets carry over from last month until you change them.</span><button data-act="dismiss-remind">Dismiss</button></div>';
 }
 // Centered spinner + message — shown while a tab is fetching from the gateway.
@@ -875,8 +879,10 @@ function render(){
     html+='<div class="banner plan"><span>Planning <b>'+esc(monthLabel(state.viewMonth))+'</b>. Edit budgets now; live spend and pacing appear once the month is active.</span><button data-act="copyprev">Copy '+esc(monthLabel(shiftKey(state.viewMonth,-1)))+' budgets</button></div>';
   } else {
     var inh=inheritedInfo(list);
-    if(inh.any){
-      html+='<div class="banner plan"><span>Some budgets are carried over from <b>'+esc(monthLabel(inh.from))+'</b> and keep applying until you change them.</span><button data-act="carryover">Lock in for '+esc(monthLabel(state.viewMonth))+'</button></div>';
+    if(inh.any && !monthReminderDismissed()){
+      html+='<div class="banner plan"><span>Some budgets are carried over from <b>'+esc(monthLabel(inh.from))+'</b> and keep applying until you change them.</span>'
+        + '<button class="mini" data-act="dismiss-remind" style="margin-left:auto">Dismiss</button>'
+        + '<button data-act="carryover">Lock in for '+esc(monthLabel(state.viewMonth))+'</button></div>';
     }
   }
 
