@@ -201,10 +201,10 @@ table.bd td{padding:7px 12px;border-bottom:1px solid var(--line2);font-variant-n
 table.bd tr:last-child td{border-bottom:none;}
 @media(max-width:680px){.charts{grid-template-columns:1fr;}}
 .rowblock{border-bottom:1px solid var(--line2);}.rowblock:last-child{border-bottom:none;}
-.row{height:54px;cursor:pointer;font-size:14px;}
+.row{min-height:54px;cursor:pointer;font-size:14px;}
 .row:hover{background:#FAFBFC;}
-.c-name{display:flex;align-items:center;gap:7px;min-width:0;}
-.acc-name{font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+.c-name{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap;row-gap:3px;padding:8px 0;}
+.acc-name{font-weight:600;letter-spacing:-.01em;white-space:normal;overflow-wrap:anywhere;word-break:break-word;min-width:0;}
 .acc-plats{display:inline-flex;gap:5px;align-items:center;flex-shrink:0;}
 .tag{font-size:9.5px;font-weight:700;color:var(--muted);background:var(--line2);border-radius:4px;padding:1px 5px;white-space:nowrap;letter-spacing:.03em;}
 .tag.flat{background:none;padding:1px 0;color:var(--faint);font-weight:600;letter-spacing:0;}
@@ -471,7 +471,14 @@ function setDisciplineClient(a, value){
   }
 }
 function dismissToMap(rows){ var out={}; (rows||[]).forEach(function(r){ var c=String(r.Client||'').trim(), u=normDate(r.Until); if(c&&u) out[c]=u; }); return out; }
-function rebuild(){ state.accounts=buildAccounts(state.rawG,state.rawM); state.dailyByClient=buildDaily(state.rawDailyG,state.rawDailyM); }
+function rebuild(){ state.accounts=buildAccounts(state.rawG,state.rawM); state.dailyByClient=buildDaily(state.rawDailyG,state.rawDailyM);
+  // Freshest completed data date across all accounts (today's partial excluded).
+  // Spend-collapse windows end here so ordinary export lag never false-alarms.
+  var mx='', ty=todayIso();
+  for(var ck in state.dailyByClient){ if(!state.dailyByClient.hasOwnProperty(ck)) continue;
+    var arr=state.dailyByClient[ck]; for(var i=0;i<arr.length;i++){ var ds=String(arr[i].date); if(ds<ty && ds>mx) mx=ds; } }
+  state.searchMaxDate = mx || null;
+}
 function accountByClient(cl){ for(var i=0;i<state.accounts.length;i++){ if(state.accounts[i].client===cl) return state.accounts[i]; } return null; }
 
 function buildAccounts(g, m){
@@ -1371,12 +1378,15 @@ function alertFor(a){
   // an account that was ~$16/day and basically stopped spending).
   (function(){
     if(res.reasons.some(function(x){return x.label==='Spend'&&x.dir==='down';})) return; // don't double-flag
-    var hist=[]; dates.forEach(function(dk){ hist.push(map[dk]); });
-    if(hist.length<8) return;
-    var recent=hist.slice(-3), base=hist.slice(Math.max(0,hist.length-3-14), hist.length-3);
-    if(base.length<5) return;
-    function av(arr){ var s=0; arr.forEach(function(p){s+=(p.spend||0);}); return arr.length?s/arr.length:0; }
-    var r=av(recent), bs=av(base);
+    if(dates.length<8) return;            // need enough history to have a baseline
+    var ref=state.searchMaxDate; if(!ref) return;
+    // Read spend by CALENDAR day (missing export row = $0), measured against the
+    // freshest completed date across the portfolio — so an account that simply
+    // stopped delivering (no rows since) still gets caught, not just one whose
+    // remaining data-days declined.
+    var cm={}; dates.forEach(function(dk){ cm[dk]=(map[dk].spend||0); });
+    function wav(endIso,n){ var s=0; for(var i=0;i<n;i++){ s+=(cm[isoAdd(endIso,-i)]||0); } return s/n; }
+    var r=wav(ref,3), bs=wav(isoAdd(ref,-3),14);
     if(!(bs>=10)) return;                 // baseline must be meaningful
     if(r > bs*0.4) return;                // not a collapse
     res.reasons.push({label:'Spend',dir:'down',critical:(r<=bs*0.15),base:bs,val:r,pct:(r-bs)/bs});
