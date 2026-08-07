@@ -643,16 +643,24 @@ function readFbRows() {
 
   var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0], idx = {};
   for (var j = 0; j < header.length; j++) idx[String(header[j]).trim()] = j;
-  function c(name) { return idx[name] == null ? -1 : idx[name]; }
+  // Accepts several candidate header names (first match wins) so a column
+  // rename in the sheet doesn't silently zero out a metric.
+  function c() { for (var a = 0; a < arguments.length; a++) { if (idx[arguments[a]] != null) return idx[arguments[a]]; } return -1; }
   var iDate = c('Date'), iAcct = c('Account name'), iCamp = c('Campaign name'),
       iTags = c('Campaign tags'), iDB = c('Daily budget'), iStatus = c('Campaign status'),
       iCost = c('Total Cost'), iImp = c('Impressions'), iClk = c('Clicks'),
-      iWC = c('Website conversions'), iFL = c('On Facebook Leads'), iVal = c('Website conversions value'),
+      // Conversions = website purchases; Revenue = their conversion value.
+      // (Sheet headers were renamed from "Website conversions[ value]"; both accepted.)
+      iWC = c('Website purchases', 'Website conversions'), iFL = c('On Facebook Leads'),
+      iVal = c('Website purchases conversion value', 'Website conversions value'),
       iActive = c('Active'),
       // Optional budget-designation columns (add any of these to the sheet):
       iLife = c('Lifetime budget'), iBType = c('Budget type'), iBLevel = c('Budget level'),
       iBStart = c('Budget start'), iBEnd = c('Budget end');
   if (iActive < 0) throw new Error('Facebook sheet is missing the "Active" column');
+  if (iDate   < 0) throw new Error('Facebook sheet is missing the "Date" column');
+  if (iAcct   < 0) throw new Error('Facebook sheet is missing the "Account name" column');
+  if (iCamp   < 0) throw new Error('Facebook sheet is missing the "Campaign name" column');
 
   var startRow = 2, numRows = lastRow - 1;
   if (numRows > FB_MAX_ROWS) { startRow = lastRow - FB_MAX_ROWS + 1; numRows = FB_MAX_ROWS; }
