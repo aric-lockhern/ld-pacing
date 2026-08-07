@@ -38,7 +38,7 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
 /* ---- one-time CSS (kept with the module) ---- */
 (function injectCSS(){
   var css =
-    '.fbgrid{display:grid;grid-template-columns:24px 2.1fr .8fr .8fr .95fr 1fr .82fr .9fr .72fr .7fr .72fr .8fr .62fr 48px;align-items:center;gap:8px;padding:0 16px;min-width:1210px;}'
+    '.fbgrid{display:grid;grid-template-columns:22px 1.95fr .78fr .78fr .92fr .95fr .8fr .88fr .7fr .66fr .68fr .78fr .6fr 40px;align-items:center;gap:7px;padding:0 12px;min-width:1120px;}'
   + '.fbhead{height:38px;background:#FAFBFC;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);font-weight:600;}'
   + '.fbrow{min-height:54px;cursor:pointer;font-size:14px;}'
   + '.fbrow:hover{background:#FAFBFC;}'

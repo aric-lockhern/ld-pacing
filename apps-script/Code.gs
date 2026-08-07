@@ -79,8 +79,10 @@ var RATE_DAYS_G     = 3;   // recent-rate window for the "trending to" line
 
 /* ---- Facebook feed (a SEPARATE spreadsheet, campaign-level by date) ----
    The gateway runs as you, so it can read this as long as your Google
-   account has access to it. Only rows whose "Active" column = "Active" are
-   served, so unmanaged accounts never reach the browser. */
+   account has access to it. Only ACTIVE accounts (managed in the tool via the
+   Facebook_Accounts tab; the sheet's "Active" column is the migration default)
+   are served, and within them deactivated campaigns with no current-month
+   delivery are dropped — so unmanaged/dead data never reaches the browser. */
 var FB_SPREADSHEET_ID = '1ealb9ssXKqspG204VubWJvkbd77A8_jVfege3uUNS20';
 var FB_TAB            = 'FB - Daily';
 var FB_LOOKBACK_DAYS  = 95;                 // trim payload to a rolling window
@@ -705,18 +707,29 @@ function readFbRows() {
     return !!sheetActive[acct];
   }
 
-  // Pass 2: rows for ACTIVE accounts only (unmanaged accounts never reach the browser).
-  var out = [];
+  // Current calendar month (script timezone) — a paused campaign is only kept if
+  // it still delivered impressions this month.
+  var now = new Date();
+  var curMonth = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2);
+  function statusActive(s) { return String(s || '').toUpperCase().indexOf('ACTIVE') >= 0; }
+
+  // Pass 2: build candidate rows for ACTIVE accounts, and per-campaign track the
+  // latest status + this-month impressions so we can drop dead campaigns.
+  var cand = [], campAgg = {};
   for (var k = 0; k < values.length; k++) {
     var r = values[k], a = String(r[iAcct] || '').trim();
     if (!a || !acctActive(a)) continue;
     var d = normDateG(r[iDate]);
     if (!d || d < cutoff) continue;
+    var camp = String(r[iCamp] || '').trim(), ck = a + '\u0001' + camp;
+    var st = iStatus < 0 ? '' : String(r[iStatus] || '').trim();
+    var ag = campAgg[ck] || (campAgg[ck] = { status: '', date: '', curImp: 0 });
+    if (d >= ag.date) { ag.date = d; ag.status = st; }              // latest status wins
+    if (d.slice(0, 7) === curMonth) ag.curImp += numv(r[iImp]);
     var o = {
-      d: d, a: a,
-      c: String(r[iCamp] || '').trim(),
+      d: d, a: a, c: camp,
       db: iDB < 0 ? 0 : numv(r[iDB]),
-      st: iStatus < 0 ? '' : String(r[iStatus] || '').trim(),
+      st: st,
       cost: numv(r[iCost]), imp: numv(r[iImp]), clk: numv(r[iClk]),
       wc: numv(r[iWC]), fl: numv(r[iFL]), val: numv(r[iVal]),
       rc: iReg < 0 ? 0 : numv(r[iReg])                 // website registrations completed
@@ -728,7 +741,16 @@ function readFbRows() {
     if (iBLevel >= 0) { var bl = String(r[iBLevel] || '').trim(); if (bl) o.bl = bl; }
     if (iBStart >= 0) { var bs = normDateG(r[iBStart]); if (bs) o.bs = bs; }
     if (iBEnd   >= 0) { var be = normDateG(r[iBEnd]);   if (be) o.be = be; }
-    out.push(o);
+    o._ck = ck;
+    cand.push(o);
+  }
+
+  // Drop deactivated campaigns with no current-month delivery — a paused campaign
+  // that still spent this month is kept (its spend still counts toward pacing).
+  var out = [];
+  for (var m2 = 0; m2 < cand.length; m2++) {
+    var o2 = cand[m2], ag2 = campAgg[o2._ck];
+    if (statusActive(ag2.status) || ag2.curImp > 0) { delete o2._ck; out.push(o2); }
   }
 
   // Full account roster (active + inactive) so the tool can list everything to
