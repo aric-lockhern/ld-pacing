@@ -214,6 +214,8 @@ table.bd tr:last-child td{border-bottom:none;}
 .trendbadge.good{color:var(--good);background:var(--good-bg);}
 .trendbadge.up{color:var(--accent);background:var(--accent-bg);}
 .recentstrip{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;}
+.downote{font-size:11.5px;color:var(--muted);margin:-2px 0 10px;padding:0 2px;}
+.downote b{color:var(--ink);font-weight:600;}
 .runway{font-size:12.5px;border-radius:9px;padding:9px 13px;margin-bottom:12px;line-height:1.45;}
 .runway.bad{background:var(--over-bg);border:1px solid #E6C3BD;color:#8C2F25;font-weight:600;}
 .runway.ok{background:var(--good-bg);border:1px solid #C5E4CE;color:#166B47;}
@@ -478,6 +480,7 @@ function rebuild(){ state.accounts=buildAccounts(state.rawG,state.rawM); state.d
   for(var ck in state.dailyByClient){ if(!state.dailyByClient.hasOwnProperty(ck)) continue;
     var arr=state.dailyByClient[ck]; for(var i=0;i<arr.length;i++){ var ds=String(arr[i].date); if(ds<ty && ds>mx) mx=ds; } }
   state.searchMaxDate = mx || null;
+  _dowCache={};   // day-of-week weights are recomputed against the fresh data
 }
 function accountByClient(cl){ for(var i=0;i<state.accounts.length;i++){ if(state.accounts[i].client===cl) return state.accounts[i]; } return null; }
 
@@ -619,17 +622,125 @@ function ctx(){
   var elapsed = state.elapsedOverride!=null ? Math.max(1,Math.min(state.elapsedOverride,dim)) : auto;
   return { isLive:isLive, dim:dim, auto:auto, elapsed:elapsed };
 }
+
+/* ============================================================
+   DAY-OF-WEEK WEIGHTING (empirical)
+   The flat "budget ÷ days" ramp assumes every weekday spends the same, so any
+   account with a weekend collapse (or any DOW skew) throws false over/under
+   pace — most visibly a weekday burn rate extrapolated flat across a weekend
+   tail. This learns each weekday's share from trailing spend and uses it to
+   (a) shape the Expected curve and (b) project the remaining days.
+   NOTE: sheet-fed tool — no ad schedule, so weights are OBSERVED, not
+   scheduled. We can tell "this weekday reliably barely spends" from the data;
+   we can NOT tell "scheduled to serve but delivered nothing" (that needs the
+   Google Ads ad-schedule feed). Confidence is gated + old linear kept as a
+   secondary field, so a thin/odd history falls back to today's behavior.  */
+var DOW_LOOKBACK=28, DOW_BASE_DAYS=14, DOW_CLAMP=3.0, DOW_MIN_OBS=2, DOW_MAD_K=3, DOW_CEIL_MULT=1.10, DOW_ACTIVE_FLOOR=5;
+function dowIdx(iso){ return new Date(iso+'T00:00:00').getDay(); }      // 0=Sun..6=Sat
+function _median(a){ if(!a.length) return 0; var s=a.slice().sort(function(x,y){return x-y;}); var m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; }
+var _dowCache={};
+function dowModel(client){
+  var key=client+'|'+state.searchMaxDate+'|'+state.viewMonth;
+  if(_dowCache[key]) return _dowCache[key];
+  var m=_dowBuild(client); _dowCache[key]=m; return m;
+}
+var _DOW_FLAT={weights:[1,1,1,1,1,1,1], baseline:null, confidence:'LOW', source:'FLAT', excluded:[], obs:[0,0,0,0,0,0,0], ceiling:null};
+function _dowBuild(client){
+  var all=accountDaily(client).filter(function(p){ return String(p.date)<todayIso(); });
+  if(all.length<7) return _DOW_FLAT;
+  var end=all[all.length-1].date, start=isoAdd(end,-(DOW_LOOKBACK-1));
+  var win=all.filter(function(p){ return String(p.date)>=start; });
+  if(win.length<7) return _DOW_FLAT;
+  // group the lookback by weekday
+  var byDow=[[],[],[],[],[],[],[]];
+  win.forEach(function(p){ byDow[dowIdx(p.date)].push(p); });
+  // Per-weekday contamination drop: a day whose spend is a MAD outlier vs that
+  // weekday's own median (a normally-busy weekday that went dark = paused / out
+  // of budget / disapproved), or zero impressions on a weekday that normally
+  // serves. A reliably-quiet weekday (real weekend collapse) is NOT dropped —
+  // its low spend IS the signal we want to learn.
+  var excluded=[], clean=[[],[],[],[],[],[],[]];
+  for(var dw=0; dw<7; dw++){
+    var rows=byDow[dw], sp=rows.map(function(p){return p.spend||0;});
+    var med=_median(sp), dev=sp.map(function(v){return Math.abs(v-med);}), mad=_median(dev);
+    rows.forEach(function(p){
+      var s=p.spend||0;
+      if(mad>0 && Math.abs(s-med) > DOW_MAD_K*1.4826*mad){ excluded.push({date:p.date,reason:(s<med?'dark_day_active_weekday':'spike_outlier')}); return; }
+      if((p.impr||0)===0 && med>DOW_ACTIVE_FLOOR){ excluded.push({date:p.date,reason:'zero_impressions_active_weekday'}); return; }
+      clean[dw].push(s);
+    });
+  }
+  var pool=[]; clean.forEach(function(a){ a.forEach(function(v){ pool.push(v); }); });
+  if(!pool.length) return _DOW_FLAT;
+  var meanAll=pool.reduce(function(s,v){return s+v;},0)/pool.length;
+  if(!(meanAll>0)) return _DOW_FLAT;
+  var obs=clean.map(function(a){return a.length;});
+  var weights=[], filled=false;
+  for(var d2=0; d2<7; d2++){
+    if(!clean[d2].length){ weights.push(1); filled=true; continue; }         // unknown weekday → neutral (flags LOW)
+    var mu=clean[d2].reduce(function(s,v){return s+v;},0)/clean[d2].length;
+    weights.push(Math.max(0, Math.min(DOW_CLAMP, mu/meanAll)));
+  }
+  var sum=weights.reduce(function(s,v){return s+v;},0);
+  if(!(sum>0)) return _DOW_FLAT;
+  var k=7/sum; weights=weights.map(function(v){return v*k;});               // normalize so Σweights == 7
+  // thin/odd history → LOW confidence; callers fall back to flat (= status quo)
+  var thin = filled || obs.some(function(n){ return n>0 && n<DOW_MIN_OBS; }) || obs.filter(function(n){return n>0;}).length<5;
+  // Level estimate: weight-normalized mean of the trailing clean days, so it
+  // isn't skewed by which weekdays happen to fall in the window.
+  var bstart=isoAdd(end,-(DOW_BASE_DAYS-1)), exSet={}; excluded.forEach(function(e){ exSet[e.date]=1; });
+  var norm=[], recentMax=0;
+  all.forEach(function(p){ if(String(p.date)<bstart) return; if(exSet[p.date]) return;
+    var w=weights[dowIdx(p.date)]; if(w>0.05) norm.push((p.spend||0)/w);
+    if((p.spend||0)>recentMax) recentMax=p.spend; });
+  var baseline = norm.length ? norm.reduce(function(s,v){return s+v;},0)/norm.length : meanAll;
+  // Delivery-ceiling proxy: we lack the sum of enabled daily budgets, so cap any
+  // single projected day at the recent peak actual daily spend ×1.10 — keeps a
+  // delivery-limited account from over-forecasting. (True ceiling needs budgets.)
+  var ceiling = recentMax>0 ? recentMax*DOW_CEIL_MULT : null;
+  return { weights:weights, baseline:baseline, confidence:(thin?'LOW':'HIGH'), source:'OBSERVED', excluded:excluded, obs:obs, ceiling:ceiling };
+}
+// Weighted forecast of the calendar month's remaining days. Returns null when
+// the model isn't confident (caller falls back to the flat projection).
+function dowProject(client, mtd){
+  var c=ctx(); if(!c.isLive) return null;
+  var m=dowModel(client);
+  if(m.confidence==='LOW' || m.baseline==null) return null;
+  var fc=[], add=0;
+  for(var day=c.elapsed+1; day<=c.dim; day++){
+    var iso=state.viewMonth+'-'+('0'+day).slice(-2), w=m.weights[dowIdx(iso)], f=w*m.baseline;
+    if(m.ceiling!=null && f>m.ceiling) f=m.ceiling;
+    add+=f; fc.push({date:iso, dow:dowIdx(iso), f:f});
+  }
+  return { proj:mtd+add, add:add, fc:fc, baseline:m.baseline, weights:m.weights, confidence:m.confidence, ceiling:m.ceiling, excluded:m.excluded, model:m };
+}
+// DOW-weighted expected cumulative $ for a given month/budget: budget × (Σ
+// weight over elapsed days)/(Σ weight over all days). Falls back to flat linear.
+function dowExpected(client, monthKey, budget){
+  var m=dowModel(client), dim=daysInMonthOf(monthKey), cum=[0], ws=0, flat=(m.confidence==='LOW');
+  for(var day=1; day<=dim; day++){ var iso=monthKey+'-'+('0'+day).slice(-2); ws+=(flat?1:m.weights[dowIdx(iso)]); cum[day]=ws; }
+  return { at:function(n){ n=Math.max(0,Math.min(dim,n)); return ws>0?budget*(cum[n]/ws):0; }, source:(flat?'FLAT':'DOW'), model:m };
+}
+var DOW_NAMES=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function remainingDowLabel(){
+  var c=ctx(); if(!c.isLive) return '';
+  var out=[]; for(var day=c.elapsed+1; day<=c.dim; day++){ var iso=state.viewMonth+'-'+('0'+day).slice(-2); out.push(DOW_NAMES[dowIdx(iso)]); }
+  return out.length ? (out.length+' remaining: '+out.join(', ')) : '';
+}
+
 function derive(acc){
   var c=ctx();
   var mtd=acc.g.spend+acc.m.spend, lastMoTotal=acc.g.last+acc.m.last, conv=acc.g.conv+acc.m.conv, val=acc.g.val+acc.m.val;
-  var forecast = c.isLive && c.elapsed>0 ? (mtd/c.elapsed)*c.dim : null;
+  var forecastLinear = c.isLive && c.elapsed>0 ? (mtd/c.elapsed)*c.dim : null;   // flat whole-month average (secondary)
+  var dp = c.isLive ? dowProject(acc.client, mtd) : null;                        // day-of-week weighted (primary when confident)
+  var forecast = dp ? dp.proj : forecastLinear;
   var b=getBudget(acc.client);
   var effBudget = b.mode==='lastMonth' ? lastMoTotal : b.amount;
   var pace = effBudget>0 && forecast!=null ? forecast/effBudget : null;
   var variance = forecast!=null ? forecast-effBudget : null;
   var cpa = conv>0 ? mtd/conv : null;
   var roas = val>0 && mtd>0 ? val/mtd : null;
-  return { mtd:mtd,lastMoTotal:lastMoTotal,conv:conv,val:val,forecast:forecast,effBudget:effBudget,pace:pace,variance:variance,cpa:cpa,roas:roas,budget:b };
+  return { mtd:mtd,lastMoTotal:lastMoTotal,conv:conv,val:val,forecast:forecast,forecastLinear:forecastLinear,dow:dp,effBudget:effBudget,pace:pace,variance:variance,cpa:cpa,roas:roas,budget:b };
 }
 
 /* ---- "trending to": project month-end from the RECENT daily rate ----
@@ -644,14 +755,17 @@ function projection(a,d){
   if(!daily.length) return null;
   var spent=0;
   daily.forEach(function(p){ if(String(p.date).slice(0,7)===state.viewMonth) spent+=p.spend; });
-  var recent=daily.slice(-RATE_DAYS), rate=0;
-  recent.forEach(function(p){ rate+=p.spend; });
-  rate = recent.length ? rate/recent.length : 0;
   var daysLeft=Math.max(0, c.dim-c.elapsed);
-  var proj=spent+rate*daysLeft;
+  // Day-of-week weighted projection of the remaining days when we have a
+  // confident model (a weekday burn rate no longer gets extrapolated flat
+  // across a weekend tail); otherwise the flat recent-rate × days-left.
+  var dp = d.dow || dowProject(a.client, spent);
+  var rate, proj, weighted=false;
+  if(dp){ rate=dp.baseline; proj=spent+dp.add; weighted=true; }
+  else { var recent=daily.slice(-RATE_DAYS), rr=0; recent.forEach(function(p){ rr+=p.spend; }); rate=recent.length?rr/recent.length:0; proj=spent+rate*daysLeft; }
   var pct = d.effBudget>0 ? proj/d.effBudget : null;
-  return { proj:proj, rate:rate, daysLeft:daysLeft, spent:spent, pct:pct,
-           gap:(d.effBudget>0 ? proj-d.effBudget : null), days:recent.length };
+  return { proj:proj, rate:rate, daysLeft:daysLeft, spent:spent, pct:pct, weighted:weighted,
+           gap:(d.effBudget>0 ? proj-d.effBudget : null), days:(dp?DOW_BASE_DAYS:RATE_DAYS) };
 }
 function trendCell(a,d,isLive,extraCls){
   var cls='c-num cell-trend'+(extraCls||'');
@@ -664,7 +778,9 @@ function trendCell(a,d,isLive,extraCls){
       : (st==='good' ? 'on track'
       : (p.gap>0 ? '+'+money(p.gap,true)+' over' : money(Math.abs(p.gap),true)+' under')));
   var tip = b ? (b.text + ' · trending to ' + money(p.proj,true))
-    : ('At the recent rate: '+money(p.spent,true)+' spent + '+money(p.rate)+'/day (last '+p.days+' days) × '+p.daysLeft+' days left');
+    : (p.weighted
+        ? ('Weekday-weighted: '+money(p.spent,true)+' spent + '+money(p.proj-p.spent,true)+' projected across the '+p.daysLeft+' remaining days (~'+money(p.rate)+'/weekday level, weekends scaled down)')
+        : ('At the recent rate: '+money(p.spent,true)+' spent + '+money(p.rate)+'/day (last '+p.days+' days) × '+p.daysLeft+' days left'));
   return '<div class="'+cls+'" title="'+esc(tip)+'"><span class="trendval t-'+st+'">'+money(p.proj,true)+'</span>'
        + '<span class="trendnote t-'+st+(b?' burn':'')+'">'+esc(note)+'</span></div>';
 }
@@ -1302,7 +1418,20 @@ function recentStripHTML(a,d){
     + (r.avg3!=null?cellv('Last 3 days avg', r.avg3):'')
     + (r.avg7!=null?cellv('Last 7 days avg', r.avg7):'')
     + '</div>';
-  return strip + runwayHTML(r, alertFor(a).burn);
+  return strip + dowNoteHTML(a, d) + runwayHTML(r, alertFor(a).burn);
+}
+/* Small readout: how the projection treats the days LEFT. Shows the weekday
+   composition of the remaining days (e.g. "3 remaining: Fri, Sat, Sun") — the
+   one fact that makes a weekend-tail false alarm obvious at a glance — and
+   whether pacing is weekday-weighted or fell back to flat. */
+function dowNoteHTML(a, d){
+  if(!ctx().isLive) return '';
+  var lbl=remainingDowLabel(); if(!lbl) return '';
+  var m=dowModel(a.client), weighted=(d.dow && d.dow.confidence!=='LOW');
+  var mode = weighted ? 'weekday-weighted' : 'flat (limited history)';
+  var extra='';
+  if(weighted && m.excluded && m.excluded.length) extra=' · '+m.excluded.length+' contaminated day'+(m.excluded.length===1?'':'s')+' excluded';
+  return '<div class="downote">Pacing: <b>'+mode+'</b> — '+esc(lbl)+extra+'</div>';
 }
 /* "At this burn rate the money runs out on <date>" — skipped when the alert
    strip above is already saying it, so the panel doesn't repeat itself. */
@@ -1328,23 +1457,37 @@ var BURN_MIN_BUDGET=500;  // ignore trivially small budgets
 var BURN_WARN_DAYS=2;     // runs dry this many days early → warning
 var BURN_CRIT_DAYS=5;     //  … → critical
 function burnInfo(a,d){
-  if(!ctx().isLive) return null;
+  var c=ctx();
+  if(!c.isLive) return null;
   if(accountDiscipline(a)==='fluid') return null;   // fluid budgets: over/under isn't flagged as an issue
+  if(c.elapsed<5) return null;                       // early-cycle projections are noise (no burn alerts before day 5)
   var r=recentPace(a,d);
   if(!r.ok || r.daysLeft<2 || r.days<3 || !(r.budget>=BURN_MIN_BUDGET)) return null;
   if(r.remaining<=0){
     return { level:'critical', early:r.daysLeft, tag:'over budget',
       text:'Budget already spent — '+money(Math.abs(r.remaining))+' over with '+r.daysLeft+' day'+(r.daysLeft===1?'':'s')+' still to go' };
   }
-  if(r.runoutDays==null || r.runoutDays>=r.daysLeft) return null;
-  var early=r.daysLeft-r.runoutDays;
+  // Day-of-week aware runout: walk the weekday-weighted forecast of the
+  // remaining days and see when the money actually runs dry — so a weekday burn
+  // rate isn't extrapolated flat across a weekend tail (the false-Critical bug).
+  var dp = d.dow || dowProject(a.client, d.mtd), iso, early, rateTxt;
+  if(dp){
+    var rem=r.remaining, hit=-1;
+    for(var i=0;i<dp.fc.length;i++){ rem-=dp.fc[i].f; if(rem<=0){ hit=i; break; } }
+    if(hit<0) return null;                            // budget lasts through month end
+    iso=dp.fc[hit].date; early=dp.fc.length-1-hit; rateTxt='~'+money(dp.baseline)+'/weekday';
+  } else {
+    if(r.runoutDays==null || r.runoutDays>=r.daysLeft) return null;   // fallback: flat recent-rate runout
+    early=r.daysLeft-r.runoutDays;
+    var out=new Date(); out.setDate(out.getDate()+Math.max(0,Math.round(r.runoutDays)));
+    iso=out.getFullYear()+'-'+('0'+(out.getMonth()+1)).slice(-2)+'-'+('0'+out.getDate()).slice(-2);
+    rateTxt=money(r.rate)+'/day';
+  }
   var lvl = early>=BURN_CRIT_DAYS ? 'critical' : (early>=BURN_WARN_DAYS ? 'warning' : null);
   if(!lvl) return null;
-  var out=new Date(); out.setDate(out.getDate()+Math.max(0,Math.round(r.runoutDays)));
-  var iso=out.getFullYear()+'-'+('0'+(out.getMonth()+1)).slice(-2)+'-'+('0'+out.getDate()).slice(-2);
   var e=Math.round(early);
   return { level:lvl, early:e, date:iso, tag:'out '+labelDate(iso),
-    text:'Burning '+money(r.rate)+'/day — the '+money(r.remaining)+' left runs out around '+labelDate(iso)+' ('+e+' day'+(e===1?'':'s')+' early)' };
+    text:'Burning '+rateTxt+' — the '+money(r.remaining)+' left runs out around '+labelDate(iso)+' ('+e+' day'+(e===1?'':'s')+' early)' };
 }
 // Alerts only apply to accounts we're actively managing — paused/unlabeled
 // and manually hidden accounts never count as an issue or a win.
@@ -1460,13 +1603,24 @@ function detailHTML(a,d){
   if(!all.length) return '';
   var daily=all.slice(-days);
 
-  var cum=0, cexp=0;
+  // Expected curve + each day's target follow the DAY-OF-WEEK weighted shape
+  // (weekend days get a low target, weekdays a high one) rather than a flat
+  // budget÷days ramp, so weekend bars aren't painted "under" and the expected
+  // line tracks the real one. Falls back to flat for LOW-confidence accounts.
+  var _expCache={};
+  function _expInc(mk, amt, dayNum){
+    if(!(amt>0)) return 0;
+    var ck=mk+'|'+amt, e=_expCache[ck]||(_expCache[ck]=dowExpected(a.client, mk, amt));
+    return e.at(dayNum)-e.at(dayNum-1);
+  }
+  var cum=0, cexp=0, clin=0;
   var rows=daily.map(function(p,i){
     cum+=p.spend;
     var mk=String(p.date).slice(0,7), b=resolveBudget(a.client,mk);
     var amt=(b.mode==='lastMonth')?d.lastMoTotal:b.amount;
-    cexp += amt>0 ? amt/daysInMonthOf(mk) : 0;
-    return { i:i, date:p.date, spend:p.spend, cum:cum, expected:cexp, target:(amt>0?amt/daysInMonthOf(mk):0), conv:p.conv,
+    var dayNum=+String(p.date).slice(8,10), flat=(amt>0?amt/daysInMonthOf(mk):0), tgt=_expInc(mk,amt,dayNum);
+    cexp += tgt; clin += flat;
+    return { i:i, date:p.date, spend:p.spend, cum:cum, expected:cexp, expectedLinear:clin, target:tgt, conv:p.conv,
              cpa:p.conv>0?p.spend/p.conv:null, rev:p.rev, roas:(p.rev>0&&p.spend>0)?p.rev/p.spend:null,
              clicks:p.clicks, impr:p.impr }; });
   var n=rows.length, last=rows[n-1];
