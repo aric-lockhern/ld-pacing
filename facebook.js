@@ -38,7 +38,7 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
 /* ---- one-time CSS (kept with the module) ---- */
 (function injectCSS(){
   var css =
-    '.fbgrid{display:grid;grid-template-columns:24px 2.1fr .8fr .8fr .95fr 1fr .82fr .9fr .72fr .7fr .72fr .8fr .62fr 34px;align-items:center;gap:8px;padding:0 14px;min-width:1180px;}'
+    '.fbgrid{display:grid;grid-template-columns:24px 2.1fr .8fr .8fr .95fr 1fr .82fr .9fr .72fr .7fr .72fr .8fr .62fr 48px;align-items:center;gap:8px;padding:0 16px;min-width:1210px;}'
   + '.fbhead{height:38px;background:#FAFBFC;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);font-weight:600;}'
   + '.fbrow{min-height:54px;cursor:pointer;font-size:14px;}'
   + '.fbrow:hover{background:#FAFBFC;}'
@@ -70,7 +70,28 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
   + '.fbautocell{cursor:pointer;border:1px solid transparent;border-radius:8px;padding:2px 6px;}'
   + '.fbautocell:hover{border-color:var(--editline);background:var(--editbg);}'
   + '.fbautocell:hover .fbautoval{color:var(--accent);}'
-  + '.fbedit{color:var(--accent);font-weight:700;}';
+  + '.fbedit{color:var(--accent);font-weight:700;}'
+  // manage-accounts panel
+  + '.mac-modal{max-width:560px;width:92vw;}'
+  + '.mac-sub{font-size:12.5px;color:var(--muted);margin:2px 0 10px;line-height:1.45;}'
+  + '.mac-count{font-size:12px;color:var(--faint);margin-bottom:8px;display:flex;align-items:center;gap:10px;}'
+  + '.mac-list{max-height:52vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;}'
+  + '.mac-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line2);}'
+  + '.mac-row:last-child{border-bottom:none;}'
+  + '.mac-tog{position:relative;display:inline-block;width:34px;height:20px;flex:0 0 auto;cursor:pointer;}'
+  + '.mac-tog input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;}'
+  + '.mac-slider{position:absolute;inset:0;background:var(--line2);border-radius:999px;transition:background .15s;}'
+  + '.mac-slider:before{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.25);}'
+  + '.mac-tog input:checked + .mac-slider{background:var(--good);}'
+  + '.mac-tog input:checked + .mac-slider:before{transform:translateX(14px);}'
+  + '.mac-names{flex:1 1 auto;min-width:0;}'
+  + '.mac-names input{width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:13px;font-weight:600;color:var(--ink);background:#fff;outline:none;}'
+  + '.mac-names input:focus{border-color:var(--accent);}'
+  + '.mac-raw{font-size:10.5px;color:var(--faint);margin-top:2px;overflow-wrap:anywhere;}'
+  + '.mac-state{flex:0 0 auto;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;border-radius:4px;padding:2px 6px;}'
+  + '.mac-state.on{color:var(--good);background:var(--good-bg);}'
+  + '.mac-state.off{color:var(--faint);background:var(--line2);}'
+  + '.mac-empty{padding:18px;text-align:center;color:var(--faint);font-size:13px;}';
   var el=document.createElement('style'); el.textContent=css; document.head.appendChild(el);
 })();
 
@@ -91,6 +112,7 @@ FB.load = function(force){
   jsonp({ action:'fbData', fresh: force?'1':'' }, 60000).then(function(res){
     if(!res || !res.ok) throw new Error(res && res.error || 'bad response');
     state.fbRaw = res.rows || [];
+    state.fbAcctList = res.accounts || [];       // full roster (active + inactive) for the manage panel
     state.fbBudgets = fbBudgetsToMap(res.budgets || []);
     FB.rebuild();
     state.fbSource='live'; render();
@@ -157,7 +179,12 @@ FB.rebuild = function(){
   var mx='', ty=todayIso();
   state.fbAccounts.forEach(function(a){ a.campaigns.forEach(function(c){ c.daily.forEach(function(p){ var dstr=String(p.date); if(dstr<ty && dstr>mx) mx=dstr; }); }); });
   state.fbMaxDate = mx || null;
+
+  // display-name map for in-tool account renames (raw account name stays the key)
+  state.fbAcctName = {};
+  (state.fbAcctList||[]).forEach(function(a){ if(a && a.name) state.fbAcctName[a.account]=a.name; });
 };
+function fbDisplayName(acct){ return (state.fbAcctName && state.fbAcctName[acct]) || acct; }
 
 /* ============================================================
    AGGREGATION + PACING MATH (shared by campaign & account)
@@ -380,7 +407,7 @@ FB.render = function(baseHtml){
 
   var accounts=(state.fbAccounts||[]).filter(function(a){ return acctVisibleCampaigns(a).length>0; });
   var fq=(state.fbFilter||'').trim().toLowerCase();
-  if(fq) accounts=accounts.filter(function(a){ return a.account.toLowerCase().indexOf(fq)>=0; });
+  if(fq) accounts=accounts.filter(function(a){ return fbDisplayName(a.account).toLowerCase().indexOf(fq)>=0 || a.account.toLowerCase().indexOf(fq)>=0; });
   // spend-collapse count (campaigns), and optional filter to just those accounts
   var dropCount=0, dropCrit=0;
   accounts.forEach(function(a){ acctVisibleCampaigns(a).forEach(function(c){ var dd=campSpendDrop(c); if(dd){ dropCount++; if(dd.level==='critical') dropCrit++; } }); });
@@ -413,6 +440,7 @@ FB.render = function(baseHtml){
     + '<div class="tactions">'
     + (isLive?('<label class="dayctl">Day <input class="dayin" id="fb-day-input" inputmode="numeric" value="'+c.elapsed+'"> of '+c.dim+' <span class="daypct">· '+Math.round(c.elapsed/c.dim*100)+'%</span></label>'):'')
     + '<span class="saveind '+state.fbSave+'" id="fb-saveind">'+fbSaveText()+'</span>'
+    + '<button class="btn" data-act="fb-manage" title="Choose which accounts are managed, and rename them for the tool">⚙ Manage accounts'+(state.fbAcctList&&state.fbAcctList.length?(' <span class="badge">'+state.fbAcctList.length+'</span>'):'')+'</button>'
     + '<button class="btn" data-act="fb-refresh">↻ Refresh</button></div></div>';
 
   if(!accounts.length && fq){
@@ -452,9 +480,10 @@ FB.render = function(baseHtml){
   html += '</div></div>';
   html += '<div class="foot"><span>Account budget = sum of its campaign budgets.</span><span class="foot-dot">·</span>'
     + '<span>Budget per campaign: <b>Automatic</b> (from the sheet — daily → spent + daily × days left; lifetime → prorated), or set <b>Daily / Monthly / Lifetime</b> in the row. Badge shows campaign- vs ad-set-level.</span><span class="foot-dot">·</span>'
-    + '<span>Only rows marked <b>Active</b> (column M) are shown.</span></div>';
+    + '<span>Only <b>active</b> accounts are shown — set which accounts are managed under <b>⚙ Manage accounts</b>.</span></div>';
 
   html += fbSlackModalHTML();
+  html += fbManageModalHTML();
   document.getElementById('app').innerHTML=html;
 };
 
@@ -463,10 +492,10 @@ function fbSlackTarget(){
   var s=state.fbSlackFor; if(!s) return null;
   if(s.kind==='campaign'){
     var camp=fbFindCamp(s.account,s.campaign); if(!camp) return null;
-    return { name:s.account+' · '+s.campaign, d:campDerive(camp), unit:'campaign' };
+    return { name:fbDisplayName(s.account)+' · '+s.campaign, d:campDerive(camp), unit:'campaign' };
   }
   var acc=fbFindAccount(s.account); if(!acc) return null;
-  return { name:s.account, d:acctDerive(acc), unit:'account' };
+  return { name:fbDisplayName(s.account), d:acctDerive(acc), unit:'account' };
 }
 function fbStatsLine(d){
   return 'MTD '+money(d.mtd,true)+' · Forecast '+money(d.forecast,true)+' · Budget '+money(d.effBudget,true)
@@ -539,6 +568,56 @@ function fbPatchTotals(){
 }
 function fbSaveText(){ return state.fbSave==='saving'?'Saving…':(state.fbSave==='saved'?'✓ Saved':'Shared with team'); }
 function fbUpdateSaveInd(){ var el=document.getElementById('fb-saveind'); if(el){ el.className='saveind '+state.fbSave; el.textContent=fbSaveText(); } }
+function fbUpdateMacSaveInd(){ var el=document.getElementById('fb-mac-saveind'); if(el){ el.className='saveind '+state.fbSave; el.textContent=fbSaveText(); } }
+
+/* ---- Manage accounts: choose which accounts are managed (active) + rename them
+   for the tool. The full roster (active + inactive) comes from the gateway; only
+   active accounts pull data & pace. Renames and active flags are team-wide. ---- */
+function fbManageModalHTML(){
+  if(!state.fbManageOpen) return '';
+  var list=(state.fbAcctList||[]).slice().sort(function(x,y){
+    var xn=(fbDisplayName(x.account)).toLowerCase(), yn=(fbDisplayName(y.account)).toLowerCase();
+    return xn<yn?-1:(xn>yn?1:0);
+  });
+  var nActive=0; list.forEach(function(a){ if(a.active) nActive++; });
+  function rowHTML(a){
+    var nm = state.fbAcctName[a.account]!=null ? state.fbAcctName[a.account] : (a.name||'');
+    return '<div class="mac-row'+(a.active?' on':'')+'">'
+      + '<label class="mac-tog" title="'+(a.active?'Managed — pulling data':'Not managed — no data pulled')+'"><input type="checkbox" class="fb-acct-active" data-acct="'+esc(a.account)+'"'+(a.active?' checked':'')+'><span class="mac-slider"></span></label>'
+      + '<div class="mac-names"><input class="fb-acct-rename" data-acct="'+esc(a.account)+'" value="'+esc(nm)+'" placeholder="'+esc(a.account)+'" spellcheck="false">'
+      + '<div class="mac-raw" title="Account name in the sheet (unchanged)">'+esc(a.account)+'</div></div>'
+      + '<span class="mac-state '+(a.active?'on':'off')+'">'+(a.active?'Active':'Inactive')+'</span></div>';
+  }
+  var body = list.length ? list.map(rowHTML).join('') : '<div class="mac-empty">No accounts found in the sheet yet.</div>';
+  return '<div class="modal-overlay" data-act="fb-manage-close"><div class="modal mac-modal">'
+    + '<div class="modal-head"><span class="modal-title">Manage Facebook accounts</span><button class="modal-x" data-act="fb-manage-close">×</button></div>'
+    + '<div class="mac-sub">Toggle which accounts are <b>managed</b> — only active accounts pull data and pace. <b>Rename</b> is tool-only and doesn’t touch the sheet. Changes are shared with the team.</div>'
+    + '<div class="mac-count"><b>'+nActive+'</b> active · '+(list.length-nActive)+' inactive <span class="saveind '+state.fbSave+'" id="fb-mac-saveind">'+fbSaveText()+'</span></div>'
+    + '<div class="mac-list">'+body+'</div>'
+    + '<div class="modal-actions"><button class="btn primary" data-act="fb-manage-close">Done</button></div>'
+    + '</div></div>';
+}
+var fbRenameTimers={};
+function fbScheduleRename(acct, name){
+  state.fbSave='saving'; fbUpdateSaveInd(); fbUpdateMacSaveInd();
+  clearTimeout(fbRenameTimers[acct]);
+  fbRenameTimers[acct]=setTimeout(function(){
+    if(WEBAPP_URL.indexOf('http')!==0){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); return; }
+    jsonp({ action:'setFbRename', account:acct, name:name })
+      .then(function(){ state.fbSave='saved'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); setTimeout(function(){ if(state.fbSave==='saved'){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); } },1400); })
+      .catch(function(){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); });
+  }, 700);
+}
+// Silent refetch after an account is (de)activated — updates the table's data
+// without flipping the whole view to the boot/loading screen.
+function fbReloadAccounts(){
+  if(WEBAPP_URL.indexOf('http')!==0){ state.fbSave='idle'; render(); return; }
+  jsonp({ action:'fbData', fresh:'1' }, 60000).then(function(res){
+    if(res && res.ok){ state.fbRaw=res.rows||[]; state.fbAcctList=res.accounts||[]; state.fbBudgets=fbBudgetsToMap(res.budgets||[]); FB.rebuild(); }
+    state.fbSave='saved'; render(); fbUpdateMacSaveInd();
+    setTimeout(function(){ if(state.fbSave==='saved'){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); } },1400);
+  }).catch(function(){ state.fbSave='idle'; render(); });
+}
 
 function trendCellHTML(proj, burn){
   if(!proj) return '<div class="c-num cell-trend">—</div>';
@@ -566,7 +645,7 @@ function acctRowHTML(a,isLive){
   var html='<div class="fbblock'+(opn?' open':'')+'" data-fbarow="'+esc(a.account)+'">'
     + '<div class="fbgrid fbrow" data-act="fb-toggle" data-acct="'+esc(a.account)+'">'
     + '<div class="c-chev" style="justify-content:center"><span class="chev">▾</span></div>'
-    + '<div class="c-name">'+burnDot+'<span class="acc-name" title="'+esc(a.account)+'">'+esc(a.account)+'</span>'
+    + '<div class="c-name">'+burnDot+'<span class="acc-name" title="'+esc(fbDisplayName(a.account)===a.account?a.account:(fbDisplayName(a.account)+'  ·  '+a.account))+'">'+esc(fbDisplayName(a.account))+'</span>'
       + '<span class="acc-plats"><span class="tag">FB</span><span class="tag flat">'+camps.length+' camp'+(camps.length===1?'':'s')+'</span></span></div>'
     + '<div class="c-num strong fb-mtd">'+cl(money(d.mtd,true))+'</div>'
     + '<div class="c-num fb-forecast">'+cl(money(d.forecast,true))+'</div>'
@@ -852,6 +931,8 @@ document.addEventListener('click', function(e){
   else if(act==='fb-slack'){ state.fbSlackFor={kind:el.getAttribute('data-kind'),account:el.getAttribute('data-acct'),campaign:el.getAttribute('data-camp')||''}; render(); var n=document.getElementById('fb-slack-note'); if(n) n.focus(); }
   else if(act==='fb-slack-send'){ fbSendSlack(); }
   else if(act==='fb-slack-cancel'){ if(el.classList.contains('modal-overlay') && e.target!==el) return; fbCloseSlack(); }
+  else if(act==='fb-manage'){ state.fbManageOpen=true; render(); }
+  else if(act==='fb-manage-close'){ if(el.classList.contains('modal-overlay') && e.target!==el) return; state.fbManageOpen=false; render(); }
 });
 document.addEventListener('input', function(e){
   if(state.view!=='facebook') return;
@@ -902,7 +983,26 @@ document.addEventListener('input', function(e){
     render();
     var fel=document.getElementById('fb-acct-filter');
     if(fel){ fel.focus(); try{ fel.setSelectionRange(fpos,fpos); }catch(err){} }
+  } else if(e.target.classList.contains('fb-acct-rename')){
+    // tool-only display rename — update live (no re-render, keep focus), save debounced
+    var racct=e.target.getAttribute('data-acct'), rname=e.target.value;
+    state.fbAcctName[racct]=rname;
+    (state.fbAcctList||[]).forEach(function(a){ if(a.account===racct) a.name=rname; });
+    fbScheduleRename(racct, String(rname).trim());
   }
+});
+// Toggling an account active/inactive (checkbox in the manage panel).
+document.addEventListener('change', function(e){
+  if(state.view!=='facebook') return;
+  if(!e.target.classList || !e.target.classList.contains('fb-acct-active')) return;
+  var acct=e.target.getAttribute('data-acct'), on=!!e.target.checked;
+  (state.fbAcctList||[]).forEach(function(a){ if(a.account===acct) a.active=on; });   // optimistic
+  state.fbSave='saving'; render(); fbUpdateMacSaveInd();
+  if(WEBAPP_URL.indexOf('http')!==0){ state.fbSave='idle'; return; }
+  jsonp({ action:'setFbActive', account:acct, active:on?'1':'0' }).then(function(r){
+    if(r && r.ok){ fbReloadAccounts(); }                 // refetch so the table gains/loses this account's data
+    else { (state.fbAcctList||[]).forEach(function(a){ if(a.account===acct) a.active=!on; }); state.fbSave='idle'; render(); toast('Couldn’t update — redeploy the gateway as a new version'); }
+  }).catch(function(){ (state.fbAcctList||[]).forEach(function(a){ if(a.account===acct) a.active=!on; }); state.fbSave='idle'; render(); toast('Couldn’t reach the gateway'); });
 });
 // Leaving an untouched Automatic→daily edit reverts it to Automatic (nothing was
 // saved). If a value was typed, the input handler already committed + cleared the
