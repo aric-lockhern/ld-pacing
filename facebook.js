@@ -40,12 +40,12 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
   var css =
     '.fbgrid{display:grid;grid-template-columns:24px 2.1fr .8fr .8fr .95fr 1fr .82fr .9fr .72fr .7fr .8fr .62fr 34px;align-items:center;gap:8px;padding:0 14px;min-width:1120px;}'
   + '.fbhead{height:38px;background:#FAFBFC;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);font-weight:600;}'
-  + '.fbrow{height:54px;cursor:pointer;font-size:14px;}'
+  + '.fbrow{min-height:54px;cursor:pointer;font-size:14px;}'
   + '.fbrow:hover{background:#FAFBFC;}'
   + '.fbblock{border-bottom:1px solid var(--line2);}'
   + '.fbblock:last-child{border-bottom:none;}'
   + '.fbcamps{background:#FBFCFD;border-top:1px dashed var(--line);}'
-  + '.fbcrow{height:48px;cursor:pointer;font-size:13px;}'
+  + '.fbcrow{min-height:48px;cursor:pointer;font-size:13px;}'
   + '.fbcrow:hover{background:#F4F7FA;}'
   + '.fbcrow .c-name{padding-left:14px;}'
   + '.fbcblock{border-bottom:1px solid var(--line2);}'
@@ -150,6 +150,13 @@ FB.rebuild = function(){
     var daily=Object.keys(mm).map(function(k){return mm[k];}).sort(byDate);
     return { account:acct, campaigns:list, daily:daily };
   }).sort(function(x,y){ return x.account.localeCompare(y.account); });
+
+  // Freshest COMPLETED data date across the whole portfolio (today's partial
+  // export excluded). Spend-drop windows end here so normal export lag — where
+  // nobody has yesterday's data yet — doesn't read as a collapse.
+  var mx='', ty=todayIso();
+  state.fbAccounts.forEach(function(a){ a.campaigns.forEach(function(c){ c.daily.forEach(function(p){ var dstr=String(p.date); if(dstr<ty && dstr>mx) mx=dstr; }); }); });
+  state.fbMaxDate = mx || null;
 };
 
 /* ============================================================
@@ -269,15 +276,24 @@ function unitBurn(mtd, effBudget, daily){
    (e.g. $16/day → $0.50/day). Compares the recent few days to the prior ~2
    weeks; percentage + floor based so small budgets are caught too. ---- */
 var FB_DROP_RECENT=3, FB_DROP_BASE=14, FB_DROP_MINHIST=8, FB_DROP_FLOOR=5, FB_DROP_RATIO=0.4, FB_DROP_CRIT=0.15;
-function fbAvgCost(arr){ if(!arr.length) return 0; var s=0; arr.forEach(function(p){ s+=p.cost; }); return s/arr.length; }
+// date -> total cost, so we can read spend by CALENDAR day (a day with no export
+// row = $0 spent, which is the whole point: a stopped campaign has missing days).
+function fbCostMap(daily){ var m={}; (daily||[]).forEach(function(p){ var k=String(p.date); m[k]=(m[k]||0)+p.cost; }); return m; }
+// average $/day over the n calendar days ending at endIso (missing days count as $0).
+function fbWinAvg(map, endIso, n){ var s=0; for(var i=0;i<n;i++){ s+=(map[isoAdd(endIso,-i)]||0); } return s/n; }
 function campSpendDrop(camp){
   if(!ctx().isLive || !fbIsActive(camp)) return null;               // only currently-active campaigns
-  var hist=camp.daily.filter(function(p){ return String(p.date)<todayIso(); });
-  if(hist.length < FB_DROP_MINHIST) return null;
-  var recent=hist.slice(-FB_DROP_RECENT);
-  var base=hist.slice(Math.max(0, hist.length-FB_DROP_RECENT-FB_DROP_BASE), hist.length-FB_DROP_RECENT);
-  if(base.length < 5) return null;
-  var r=fbAvgCost(recent), bs=fbAvgCost(base);
+  if(!camp.daily.length) return null;
+  // Measure ending at the freshest COMPLETED data date across the whole
+  // portfolio, not this campaign's last row — so a campaign that simply stopped
+  // exporting (all zeros since) is still measured against the same recent window,
+  // while ordinary export lag (nobody has today's data yet) never false-alarms.
+  var ref=state.fbMaxDate; if(!ref) return null;
+  var first=String(camp.daily[0].date);                            // daily is sorted ascending
+  if(fbDaysInc(first, ref) < FB_DROP_MINHIST) return null;         // not enough history behind the window
+  var map=fbCostMap(camp.daily);
+  var r=fbWinAvg(map, ref, FB_DROP_RECENT);
+  var bs=fbWinAvg(map, isoAdd(ref,-FB_DROP_RECENT), FB_DROP_BASE);
   if(!(bs>=FB_DROP_FLOOR)) return null;                             // baseline must be meaningful
   if(r > bs*FB_DROP_RATIO) return null;                            // not a real collapse
   var pct=(r-bs)/bs;
@@ -574,6 +590,14 @@ function fbLevelBadge(camp){
 }
 // The budget cell, which varies by mode.
 function campBudgetCell(camp,d,b,key){
+  // Clicked an Automatic cell to edit, but nothing typed yet: show an editable
+  // daily field WITHOUT saving. Blurring it empty reverts to Automatic; typing a
+  // value commits it (see the fb-daily-input handler + focusout below).
+  if(state.fbPendingDaily===key && b.mode==='auto'){
+    return '<div class="fbdailycell">'
+      +'<div class="fbdailyfield"><span class="pre">$</span><input class="fb-daily-input" data-key="'+esc(key)+'" data-pending="1" inputmode="numeric" value="" placeholder="'+fmtInt(campDailyVal(camp,b)||0)+'"><span class="suf">/day</span></div>'
+      +'<div class="fbmohint">Type a daily budget · blank keeps Automatic</div></div>';
+  }
   var carried = b.inherited ? '<span class="carried" title="Carried from '+esc(monthLabel(b.from))+'">↩</span>' : '';
   var inh = b.inherited?' inherited':'';
   if(b.mode==='manual'){
@@ -664,17 +688,31 @@ function campDetailHTML(camp,d){
 
 function fbChartsHTML(camp,d){
   var days=state.fbDetailDays||30;
-  var all=camp.daily.filter(function(p){ return String(p.date)<todayIso(); });
-  if(!all.length) return '<div class="fbmeta">No daily history yet.</div>';
-  var daily=all.slice(-days);
+  if(!camp.daily.length) return '<div class="fbmeta">No daily history yet.</div>';
+  // Per-day data keyed by date so we can walk a CONTINUOUS calendar and fill
+  // days with no export row as $0 — that's what makes a drop-to-zero visible.
+  var rich={};
+  camp.daily.forEach(function(p){ var k=String(p.date); var o=rich[k]||(rich[k]={cost:0,imp:0,clk:0,wc:0,fl:0,val:0}); o.cost+=p.cost;o.imp+=p.imp;o.clk+=p.clk;o.wc+=p.wc;o.fl+=p.fl;o.val+=p.val; });
+  var first=String(camp.daily[0].date);                       // sorted ascending
+  var monthEnd=state.viewMonth+'-'+('0'+daysInMonthOf(state.viewMonth)).slice(-2);
+  var yest=isoAdd(todayIso(),-1);
+  // Range ends at yesterday for the live month (so every elapsed day shows,
+  // data or not), or the month's last day when browsing a past month.
+  var end=(state.viewMonth===state.liveKey) ? (yest<monthEnd?yest:monthEnd) : monthEnd;
+  if(end<first) return '<div class="fbmeta">No daily history yet.</div>';
+  var start=isoAdd(end,-(days-1));
+  if(start<first) start=first;                                // don't pad with dead days before the campaign existed
   var dim=daysInMonthOf(state.viewMonth);
   var target = d.effBudget>0 ? d.effBudget/dim : 0;
-  var cum=0, cexp=0;
-  var rows=daily.map(function(p,i){
-    cum+=p.cost; cexp+=target;
-    return { i:i, date:p.date, cost:p.cost, cum:cum, expected:cexp, target:target,
-             wc:p.wc, fl:p.fl, val:p.val, roas:(p.val>0&&p.cost>0)?p.val/p.cost:null, clicks:p.clk, impr:p.imp };
-  });
+  var cum=0, cexp=0, rows=[], iso=start, i=0;
+  while(iso<=end){
+    var rr=rich[iso]||{cost:0,imp:0,clk:0,wc:0,fl:0,val:0};
+    cum+=rr.cost; cexp+=target;
+    rows.push({ i:i, date:iso, cost:rr.cost, cum:cum, expected:cexp, target:target,
+                wc:rr.wc, fl:rr.fl, val:rr.val, roas:(rr.val>0&&rr.cost>0)?rr.val/rr.cost:null, clicks:rr.clk, impr:rr.imp });
+    iso=isoAdd(iso,1); i++;
+  }
+  if(!rows.length) return '<div class="fbmeta">No daily history yet.</div>';
   var n=rows.length, last=rows[n-1];
   var moneyY=function(v){return money(v,true);};
   var xTicks=(function(){ var k=Math.min(6,n),t=[]; for(var i=0;i<k;i++){ var idx=Math.round(i*(n-1)/((k-1)||1)); t.push({x:idx,label:labelDate(rows[idx].date)}); } return t; })();
@@ -784,7 +822,8 @@ document.addEventListener('click', function(e){
   else if(act==='fb-toggle-drops'){ state.fbFilterDrops=!state.fbFilterDrops; render(); }
   else if(act==='fb-to-daily'){
     var k=el.getAttribute('data-key');
-    fbSetBudget(k,{mode:'daily',amount:0});   // switch to editable daily (renders)
+    state.fbPendingDaily=k;   // local, unsaved edit — nothing persists until a value is typed
+    render();
     var din=document.querySelector('[data-fbrow="'+cssEscFb(k)+'"] .fb-daily-input');
     if(din){ din.focus(); try{ din.select(); }catch(e){} }
   }
@@ -825,6 +864,11 @@ document.addEventListener('input', function(e){
     del.value=dfmt;
     var dp=0,ds=0; while(dp<dfmt.length&&ds<dbefore){ if(dfmt.charCodeAt(dp)>=48&&dfmt.charCodeAt(dp)<=57) ds++; dp++; }
     try{ del.setSelectionRange(dp,dp); }catch(err){}
+    // A pending (just-clicked Automatic) cell only commits once a real value is
+    // typed — an empty pending field stays revertible (see focusout below).
+    var dpending = del.getAttribute('data-pending')==='1' && state.fbPendingDaily===dkey;
+    if(dpending && !(dval>0)) return;
+    if(dpending) state.fbPendingDaily=null;               // value typed → commit
     fbSetBudget(dkey,{mode:'daily',amount:dval}, true);  // store the DAILY budget; keep focus
     fbPatchKey(dkey);
   } else if(e.target.classList.contains('fb-life-input')){
@@ -848,5 +892,16 @@ document.addEventListener('input', function(e){
     var fel=document.getElementById('fb-acct-filter');
     if(fel){ fel.focus(); try{ fel.setSelectionRange(fpos,fpos); }catch(err){} }
   }
+});
+// Leaving an untouched Automatic→daily edit reverts it to Automatic (nothing was
+// saved). If a value was typed, the input handler already committed + cleared the
+// pending flag, so this is a no-op.
+document.addEventListener('focusout', function(e){
+  if(state.view!=='facebook') return;
+  var t=e.target;
+  if(!t.classList || !t.classList.contains('fb-daily-input') || t.getAttribute('data-pending')!=='1') return;
+  if(!state.fbPendingDaily) return;                       // already committed
+  var digits=(t.value||'').replace(/[^0-9]/g,'');
+  if(digits==='' || parseInt(digits,10)===0){ state.fbPendingDaily=null; render(); }
 });
 })();
