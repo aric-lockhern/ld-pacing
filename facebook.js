@@ -38,7 +38,7 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
 /* ---- one-time CSS (kept with the module) ---- */
 (function injectCSS(){
   var css =
-    '.fbgrid{display:grid;grid-template-columns:24px 2.1fr .8fr .8fr .95fr 1fr .82fr .9fr .72fr .7fr .8fr .62fr 34px;align-items:center;gap:8px;padding:0 14px;min-width:1120px;}'
+    '.fbgrid{display:grid;grid-template-columns:24px 2.1fr .8fr .8fr .95fr 1fr .82fr .9fr .72fr .7fr .72fr .8fr .62fr 34px;align-items:center;gap:8px;padding:0 14px;min-width:1180px;}'
   + '.fbhead{height:38px;background:#FAFBFC;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);font-weight:600;}'
   + '.fbrow{min-height:54px;cursor:pointer;font-size:14px;}'
   + '.fbrow:hover{background:#FAFBFC;}'
@@ -126,9 +126,9 @@ FB.rebuild = function(){
     if(r.bl) o.budgetLevel=String(r.bl).toLowerCase();          // campaign | ad set (from sheet)
     if(r.bs) o.budgetStart=r.bs; if(r.be) o.budgetEnd=r.be;     // lifetime flight dates
     if(r.st) o.status=r.st;                                      // latest status wins
-    var dm = o.dayMap[date] || (o.dayMap[date]={ date:date, cost:0, imp:0, clk:0, wc:0, fl:0, val:0 });
+    var dm = o.dayMap[date] || (o.dayMap[date]={ date:date, cost:0, imp:0, clk:0, wc:0, fl:0, rc:0, val:0 });
     dm.cost+=toNum(r.cost); dm.imp+=toNum(r.imp); dm.clk+=toNum(r.clk);
-    dm.wc+=toNum(r.wc); dm.fl+=toNum(r.fl); dm.val+=toNum(r.val);
+    dm.wc+=toNum(r.wc); dm.fl+=toNum(r.fl); dm.rc+=toNum(r.rc); dm.val+=toNum(r.val);
   });
 
   state.fbCampaignsBy = {};                        // account -> [campaign,...]
@@ -144,8 +144,8 @@ FB.rebuild = function(){
     // merged account daily series (sum campaigns by date)
     var mm={};
     list.forEach(function(c){ c.daily.forEach(function(p){
-      var d=mm[p.date]||(mm[p.date]={date:p.date,cost:0,imp:0,clk:0,wc:0,fl:0,val:0});
-      d.cost+=p.cost; d.imp+=p.imp; d.clk+=p.clk; d.wc+=p.wc; d.fl+=p.fl; d.val+=p.val;
+      var d=mm[p.date]||(mm[p.date]={date:p.date,cost:0,imp:0,clk:0,wc:0,fl:0,rc:0,val:0});
+      d.cost+=p.cost; d.imp+=p.imp; d.clk+=p.clk; d.wc+=p.wc; d.fl+=p.fl; d.rc+=p.rc; d.val+=p.val;
     }); });
     var daily=Object.keys(mm).map(function(k){return mm[k];}).sort(byDate);
     return { account:acct, campaigns:list, daily:daily };
@@ -163,8 +163,8 @@ FB.rebuild = function(){
    AGGREGATION + PACING MATH (shared by campaign & account)
    ============================================================ */
 function aggMonth(daily, ym){
-  var o={cost:0,wc:0,fl:0,val:0,imp:0,clk:0};
-  daily.forEach(function(p){ if(String(p.date).slice(0,7)===ym){ o.cost+=p.cost;o.wc+=p.wc;o.fl+=p.fl;o.val+=p.val;o.imp+=p.imp;o.clk+=p.clk; } });
+  var o={cost:0,wc:0,fl:0,rc:0,val:0,imp:0,clk:0};
+  daily.forEach(function(p){ if(String(p.date).slice(0,7)===ym){ o.cost+=p.cost;o.wc+=p.wc;o.fl+=p.fl;o.rc+=(p.rc||0);o.val+=p.val;o.imp+=p.imp;o.clk+=p.clk; } });
   return o;
 }
 
@@ -307,7 +307,9 @@ function campDerive(camp){
   var view=aggMonth(camp.daily, state.viewMonth);
   var b=campGetBudget(camp), eff=campEffBudget(camp,b);
   var p=unitPace(view.cost, eff, camp.daily);
-  p.wc=view.wc; p.fl=view.fl; p.val=view.val;
+  p.wc=view.wc; p.fl=view.fl; p.rc=view.rc; p.val=view.val;
+  p.leads = view.fl + view.rc;                                   // On Facebook Leads + website registrations
+  p.cpl = (p.leads>0 && view.cost>0) ? view.cost/p.leads : null; // cost per lead
   p.roas = view.val>0 && view.cost>0 ? view.val/view.cost : null;
   p.budget=b; p.proj=unitProjection(camp.daily, eff); p.burn=unitBurn(view.cost, eff, camp.daily);
   p.drop=campSpendDrop(camp);
@@ -331,15 +333,17 @@ function acctVisibleCampaigns(acc){ return (acc.campaigns||[]).filter(campVisibl
 function acctDerive(acc){
   // account = rollup of its VISIBLE campaigns only; budget = sum of their budgets
   var camps=acctVisibleCampaigns(acc);
-  var eff=0, mtd=0, wc=0, fl=0, val=0, mm={};
+  var eff=0, mtd=0, wc=0, fl=0, rc=0, val=0, mm={};
   camps.forEach(function(c){
     var b=campGetBudget(c); eff+=campEffBudget(c,b);
-    var a=aggMonth(c.daily, state.viewMonth); mtd+=a.cost; wc+=a.wc; fl+=a.fl; val+=a.val;
+    var a=aggMonth(c.daily, state.viewMonth); mtd+=a.cost; wc+=a.wc; fl+=a.fl; rc+=a.rc; val+=a.val;
     c.daily.forEach(function(p){ var d=mm[p.date]||(mm[p.date]={date:p.date,cost:0}); d.cost+=p.cost; });
   });
   var daily=Object.keys(mm).map(function(k){return mm[k];}).sort(byDate);
   var p=unitPace(mtd, eff, daily);
-  p.wc=wc; p.fl=fl; p.val=val; p.nCamps=camps.length;
+  p.wc=wc; p.fl=fl; p.rc=rc; p.val=val; p.nCamps=camps.length;
+  p.leads = fl + rc;
+  p.cpl = (p.leads>0 && mtd>0) ? mtd/p.leads : null;
   p.roas = val>0 && mtd>0 ? val/mtd : null;
   p.proj=unitProjection(daily, eff); p.burn=unitBurn(mtd, eff, daily);
   var drop=null;   // worst spend-collapse among this account's visible campaigns
@@ -382,8 +386,10 @@ FB.render = function(baseHtml){
   accounts.forEach(function(a){ acctVisibleCampaigns(a).forEach(function(c){ var dd=campSpendDrop(c); if(dd){ dropCount++; if(dd.level==='critical') dropCrit++; } }); });
   if(state.fbFilterDrops) accounts=accounts.filter(function(a){ return acctVisibleCampaigns(a).some(function(c){ return campSpendDrop(c); }); });
   // summary
-  var t={mtd:0,forecast:0,budget:0,proj:0,wc:0,fl:0,val:0};
-  accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); t.wc+=d.wc; t.fl+=d.fl; t.val+=d.val; });
+  var t={mtd:0,forecast:0,budget:0,proj:0,wc:0,fl:0,rc:0,val:0};
+  accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); t.wc+=d.wc; t.fl+=d.fl; t.rc+=d.rc; t.val+=d.val; });
+  t.leads = t.fl + t.rc;
+  t.cpl = (t.leads>0 && t.mtd>0) ? t.mtd/t.leads : null;
   t.roas = t.val>0 && t.mtd>0 ? t.val/t.mtd : null;
   t.pace = isLive&&t.budget>0 ? t.forecast/t.budget : null;
   t.variance = isLive ? t.forecast-t.budget : null;
@@ -425,7 +431,7 @@ FB.render = function(baseHtml){
     + '<div class="c-num">MTD spend</div><div class="c-num">Forecast</div>'
     + '<div class="c-budget">Budget</div><div class="c-pace">Pace to budget</div>'
     + '<div class="c-num">Δ vs budget</div><div class="c-num">Trending to</div>'
-    + '<div class="c-num">Conversions</div><div class="c-num">FB leads</div><div class="c-num">Revenue</div><div class="c-num">ROAS</div><div></div></div>';
+    + '<div class="c-num">Conversions</div><div class="c-num">Leads</div><div class="c-num">CPL</div><div class="c-num">Revenue</div><div class="c-num">ROAS</div><div></div></div>';
 
   accounts.forEach(function(a){ html += acctRowHTML(a,isLive); });
 
@@ -438,7 +444,8 @@ FB.render = function(baseHtml){
     + '<div class="c-num '+(t.variance>0?'neg':'pos')+'" id="fb-tr-var">'+(isLive&&t.variance!=null?((t.variance>0?'+':'')+money(t.variance,true)):'—')+'</div>'
     + '<div class="c-num" id="fb-tr-trend">'+fbTrendTot(t,isLive)+'</div>'
     + '<div class="c-num">'+cellL(intf(t.wc))+'</div>'
-    + '<div class="c-num">'+cellL(intf(t.fl))+'</div>'
+    + '<div class="c-num">'+cellL(intf(t.leads))+'</div>'
+    + '<div class="c-num">'+cellL(t.cpl!=null?money(t.cpl):'—')+'</div>'
     + '<div class="c-num">'+cellL(t.val>0?money(t.val,true):'—')+'</div>'
     + '<div class="c-num">'+cellL(xfmt(t.roas))+'</div><div></div></div>';
 
@@ -463,7 +470,9 @@ function fbSlackTarget(){
 }
 function fbStatsLine(d){
   return 'MTD '+money(d.mtd,true)+' · Forecast '+money(d.forecast,true)+' · Budget '+money(d.effBudget,true)
-    + ' · Pace '+pct(d.pace)+' · Conv '+intf(d.wc)+(d.val>0?(' · Rev '+money(d.val,true)+' · ROAS '+xfmt(d.roas)):'');
+    + ' · Pace '+pct(d.pace)+' · Conv '+intf(d.wc)
+    + (d.leads>0?(' · Leads '+intf(d.leads)+(d.cpl!=null?(' · CPL '+money(d.cpl)):'')):'')
+    + (d.val>0?(' · Rev '+money(d.val,true)+' · ROAS '+xfmt(d.roas)):'');
 }
 function fbSlackModalHTML(){
   var tgt=fbSlackTarget(); if(!tgt) return '';
@@ -566,7 +575,8 @@ function acctRowHTML(a,isLive){
     + '<div class="c-num fb-var '+(d.variance>0?'neg':'pos')+'">'+(isLive&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
     + (isLive?trendCellHTML(d.proj,d.burn):'<div class="c-num cell-trend">—</div>')
     + '<div class="c-num">'+cl(intf(d.wc))+'</div>'
-    + '<div class="c-num">'+cl(intf(d.fl))+'</div>'
+    + '<div class="c-num">'+cl(intf(d.leads))+'</div>'
+    + '<div class="c-num">'+cl(d.cpl!=null?money(d.cpl):'—')+'</div>'
     + '<div class="c-num">'+cl(d.val>0?money(d.val,true):'—')+'</div>'
     + '<div class="c-num">'+cl(xfmt(d.roas))+'</div>'
     + '<div class="c-chev" data-noexpand="1"><button class="rowmsg" data-act="fb-slack" data-kind="account" data-acct="'+esc(a.account)+'" title="Note to #pacing">✎</button></div></div>';
@@ -648,7 +658,8 @@ function campRowHTML(a,camp,isLive){
     + '<div class="c-num fb-var '+(d.variance>0?'neg':'pos')+'">'+(isLive&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
     + (isLive?trendCellHTML(d.proj,d.burn):'<div class="c-num cell-trend">—</div>')
     + '<div class="c-num">'+cl(intf(d.wc))+'</div>'
-    + '<div class="c-num">'+cl(intf(d.fl))+'</div>'
+    + '<div class="c-num">'+cl(intf(d.leads))+'</div>'
+    + '<div class="c-num">'+cl(d.cpl!=null?money(d.cpl):'—')+'</div>'
     + '<div class="c-num">'+cl(d.val>0?money(d.val,true):'—')+'</div>'
     + '<div class="c-num">'+cl(xfmt(d.roas))+'</div>'
     + '<div class="c-chev"><button class="rowmsg" data-noexpand="1" data-act="fb-slack" data-kind="campaign" data-acct="'+esc(camp.account)+'" data-camp="'+esc(camp.campaign)+'" title="Note to #pacing">✎</button><span class="chev">▾</span></div></div>';
@@ -692,7 +703,7 @@ function fbChartsHTML(camp,d){
   // Per-day data keyed by date so we can walk a CONTINUOUS calendar and fill
   // days with no export row as $0 — that's what makes a drop-to-zero visible.
   var rich={};
-  camp.daily.forEach(function(p){ var k=String(p.date); var o=rich[k]||(rich[k]={cost:0,imp:0,clk:0,wc:0,fl:0,val:0}); o.cost+=p.cost;o.imp+=p.imp;o.clk+=p.clk;o.wc+=p.wc;o.fl+=p.fl;o.val+=p.val; });
+  camp.daily.forEach(function(p){ var k=String(p.date); var o=rich[k]||(rich[k]={cost:0,imp:0,clk:0,wc:0,fl:0,rc:0,val:0}); o.cost+=p.cost;o.imp+=p.imp;o.clk+=p.clk;o.wc+=p.wc;o.fl+=p.fl;o.rc+=(p.rc||0);o.val+=p.val; });
   var first=String(camp.daily[0].date);                       // sorted ascending
   var monthEnd=state.viewMonth+'-'+('0'+daysInMonthOf(state.viewMonth)).slice(-2);
   var yest=isoAdd(todayIso(),-1);
@@ -706,10 +717,10 @@ function fbChartsHTML(camp,d){
   var target = d.effBudget>0 ? d.effBudget/dim : 0;
   var cum=0, cexp=0, rows=[], iso=start, i=0;
   while(iso<=end){
-    var rr=rich[iso]||{cost:0,imp:0,clk:0,wc:0,fl:0,val:0};
+    var rr=rich[iso]||{cost:0,imp:0,clk:0,wc:0,fl:0,rc:0,val:0};
     cum+=rr.cost; cexp+=target;
     rows.push({ i:i, date:iso, cost:rr.cost, cum:cum, expected:cexp, target:target,
-                wc:rr.wc, fl:rr.fl, val:rr.val, roas:(rr.val>0&&rr.cost>0)?rr.val/rr.cost:null, clicks:rr.clk, impr:rr.imp });
+                wc:rr.wc, fl:rr.fl, rc:rr.rc, leads:(rr.fl+rr.rc), val:rr.val, roas:(rr.val>0&&rr.cost>0)?rr.val/rr.cost:null, clicks:rr.clk, impr:rr.imp });
     iso=isoAdd(iso,1); i++;
   }
   if(!rows.length) return '<div class="fbmeta">No daily history yet.</div>';
@@ -745,10 +756,10 @@ function fbChartsHTML(camp,d){
     + [30,60,90].map(function(dd){return '<button class="'+(days===dd?'on':'')+'" data-act="fb-range" data-days="'+dd+'">'+dd+'d</button>';}).join('')
     + '</div><span class="rangecount">'+n+' days · '+labelDate(rows[0].date)+' – '+labelDate(last.date)+'</span></div>';
 
-  var tbl='<table class="bd"><thead><tr><th>Day</th><th class="r">Spend</th><th class="r">Cumulative</th><th class="r">Expected</th><th class="r">Conversions</th><th class="r">FB leads</th>'
+  var tbl='<table class="bd"><thead><tr><th>Day</th><th class="r">Spend</th><th class="r">Cumulative</th><th class="r">Expected</th><th class="r">Conversions</th><th class="r">Leads</th>'
     + (hasRev?'<th class="r">Revenue</th><th class="r">ROAS</th>':'')
     + '<th class="r">Clicks</th><th class="r">Impr.</th></tr></thead><tbody>';
-  rows.slice().reverse().forEach(function(r){ tbl+='<tr><td>'+labelDate(r.date)+'</td><td class="r">'+money(r.cost)+'</td><td class="r">'+money(r.cum)+'</td><td class="r">'+(r.expected?money(r.expected):'—')+'</td><td class="r">'+intf(r.wc)+'</td><td class="r">'+intf(r.fl)+'</td>'
+  rows.slice().reverse().forEach(function(r){ tbl+='<tr><td>'+labelDate(r.date)+'</td><td class="r">'+money(r.cost)+'</td><td class="r">'+money(r.cum)+'</td><td class="r">'+(r.expected?money(r.expected):'—')+'</td><td class="r">'+intf(r.wc)+'</td><td class="r">'+intf(r.leads)+'</td>'
     + (hasRev?('<td class="r">'+(r.val>0?money(r.val):'—')+'</td><td class="r">'+(r.roas==null?'—':(r.roas.toFixed(2)+'x'))+'</td>'):'')
     + '<td class="r">'+intf(r.clicks)+'</td><td class="r">'+intf(r.impr)+'</td></tr>'; });
   tbl+='</tbody></table>';

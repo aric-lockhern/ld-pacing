@@ -653,6 +653,7 @@ function readFbRows() {
       // (Sheet headers were renamed from "Website conversions[ value]"; both accepted.)
       iWC = c('Website purchases', 'Website conversions'), iFL = c('On Facebook Leads'),
       iVal = c('Website purchases conversion value', 'Website conversions value'),
+      iReg = c('Website registrations completed'),   // 2nd lead source; summed with On Facebook Leads
       iActive = c('Active'),
       // Optional budget-designation columns (add any of these to the sheet):
       iLife = c('Lifetime budget'), iBType = c('Budget type'), iBLevel = c('Budget level'),
@@ -682,7 +683,8 @@ function readFbRows() {
       db: iDB < 0 ? 0 : numv(r[iDB]),
       st: iStatus < 0 ? '' : String(r[iStatus] || '').trim(),
       cost: numv(r[iCost]), imp: numv(r[iImp]), clk: numv(r[iClk]),
-      wc: numv(r[iWC]), fl: numv(r[iFL]), val: numv(r[iVal])
+      wc: numv(r[iWC]), fl: numv(r[iFL]), val: numv(r[iVal]),
+      rc: iReg < 0 ? 0 : numv(r[iReg])                 // website registrations completed
     };
     // Optional fields: only include when non-empty, to keep the payload small.
     var tg = iTags < 0 ? '' : String(r[iTags] || '').trim(); if (tg) o.tg = tg;
