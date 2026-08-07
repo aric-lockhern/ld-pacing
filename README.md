@@ -68,8 +68,17 @@ The constants in `Code.gs` are inert `REDACTED_…` fallbacks.
 fed from a **separate** Google Sheet (`FB - Daily`, campaign-level by date),
 read through the gateway's `fbData` action.
 
-- Only rows whose **`Active` column = "Active"** are served — unmanaged accounts
-  never reach the browser. The gateway also trims to the last 95 days.
+- **Which accounts are managed is controlled in the tool** — **⚙ Manage
+  accounts** lists every account in the sheet with an active/inactive toggle;
+  only **active** accounts pull data and pace, so unmanaged accounts never reach
+  the browser. Active flags + tool-only **display renames** are stored team-wide
+  in a `Facebook_Accounts` tab in the main sheet (`Account · Active · Name`), and
+  the account name in the `FB - Daily` sheet stays the join key (renames don't
+  touch it). The sheet's old `Active` column is now optional — it's used only as
+  the default for an account the tool hasn't toggled yet (smooth migration). The
+  gateway trims to the last 95 days.
+- **Leads** = `On Facebook Leads` + `Website registrations completed` (summed),
+  with a **CPL** column; purchase accounts still show Conversions/Revenue/ROAS.
 - Two levels: an **account rollup** row, expandable to **per-campaign pacing**
   (each campaign has its own monthly budget).
 - Campaign budgets are stored in a `Facebook_Budgets` tab in the main sheet

@@ -88,6 +88,8 @@ var FB_MAX_ROWS       = 120000;             // safety cap on rows read (newest a
 var FB_CACHE_SECS     = 300;                // cache the heavy FB read for 5 min
 var FB_BUDGET_TAB     = 'Facebook_Budgets'; // stored in the MAIN (private) sheet
 var FB_BUDGET_HEADER  = ['Account', 'Campaign', 'Month', 'Mode', 'Amount', 'Updated'];
+var FB_ACCTS_TAB      = 'Facebook_Accounts'; // tool-managed active flag + display rename, keyed by account (MAIN sheet)
+var FB_ACCTS_HEADER   = ['Account', 'Active', 'Name', 'Updated'];
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
@@ -119,6 +121,10 @@ function doGet(e) {
       out = fbData(p);
     } else if (p.action === 'setFbBudget') {
       out = setFbBudget(p);
+    } else if (p.action === 'setFbActive') {
+      out = setFbActive(p);
+    } else if (p.action === 'setFbRename') {
+      out = setFbRename(p);
     } else if (p.action === 'setDiscipline') {
       out = setDiscipline(p);
     } else if (p.action === 'changelog') {
@@ -601,11 +607,21 @@ function normDateG(v) {
 function fbData(p) {
   requireSecret(p);
   var cache = CacheService.getScriptCache();
-  var rows = null;
-  if (p.fresh !== '1') rows = fbCacheGet_(cache, 'fbRows');        // serve cache unless ?fresh=1
-  if (!rows) { rows = readFbRows(); fbCachePut_(cache, 'fbRows', rows, FB_CACHE_SECS); }
+  var data = null;
+  if (p.fresh !== '1') data = fbCacheGet_(cache, 'fbData');        // serve cache unless ?fresh=1
+  if (!data) { data = readFbRows(); fbCachePut_(cache, 'fbData', data, FB_CACHE_SECS); }
   var budgets = readTab(FB_BUDGET_TAB).map(function (r) { r.Month = normMonth(r.Month); return r; }); // small tab, always fresh
-  return { ok: true, rows: rows, budgets: budgets };
+  return { ok: true, rows: data.rows || [], accounts: data.accounts || [], budgets: budgets };
+}
+// Drop the cached FB read (rows depend on the active set, so any account
+// activate/deactivate/rename must invalidate it).
+function fbCacheClear_(cache) {
+  try {
+    var nStr = cache.get('fbData_n'); if (!nStr) return;
+    var n = parseInt(nStr, 10), keys = ['fbData_n'];
+    for (var i = 0; i < n; i++) keys.push('fbData_' + i);
+    cache.removeAll(keys);
+  } catch (e) {}
 }
 
 // Chunked Script-cache helpers (a cache value maxes at ~100KB, so split).
@@ -639,7 +655,7 @@ function readFbRows() {
   var sheet = ss.getSheetByName(FB_TAB);
   if (!sheet) throw new Error('Facebook tab not found: "' + FB_TAB + '"');
   var lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
-  if (lastRow < 2 || lastCol < 1) return [];
+  if (lastRow < 2 || lastCol < 1) return { rows: [], accounts: [] };
 
   var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0], idx = {};
   for (var j = 0; j < header.length; j++) idx[String(header[j]).trim()] = j;
@@ -658,10 +674,12 @@ function readFbRows() {
       // Optional budget-designation columns (add any of these to the sheet):
       iLife = c('Lifetime budget'), iBType = c('Budget type'), iBLevel = c('Budget level'),
       iBStart = c('Budget start'), iBEnd = c('Budget end');
-  if (iActive < 0) throw new Error('Facebook sheet is missing the "Active" column');
   if (iDate   < 0) throw new Error('Facebook sheet is missing the "Date" column');
   if (iAcct   < 0) throw new Error('Facebook sheet is missing the "Account name" column');
   if (iCamp   < 0) throw new Error('Facebook sheet is missing the "Campaign name" column');
+  // The "Active" column is now optional: which accounts are managed is controlled
+  // in the tool (Facebook_Accounts tab). If the column is still present it acts as
+  // the default for any account the tool hasn't set yet, for a smooth migration.
 
   var startRow = 2, numRows = lastRow - 1;
   if (numRows > FB_MAX_ROWS) { startRow = lastRow - FB_MAX_ROWS + 1; numRows = FB_MAX_ROWS; }
@@ -670,15 +688,32 @@ function readFbRows() {
   var cd = new Date(); cd.setDate(cd.getDate() - FB_LOOKBACK_DAYS);
   var cutoff = cd.getFullYear() + '-' + ('0' + (cd.getMonth() + 1)).slice(-2) + '-' + ('0' + cd.getDate()).slice(-2);
 
-  var out = [];
+  var meta = readFbAccountsMeta_();                                 // tool-managed active/rename, keyed by account
+
+  // Pass 1: every distinct account in the window, and whether the sheet marks it
+  // Active anywhere (the migration default).
+  var seen = {}, sheetActive = {};
   for (var i = 0; i < values.length; i++) {
-    var r = values[i];
-    if (String(r[iActive]).trim() !== 'Active') continue;         // managed-account gate
+    var acct = String(values[i][iAcct] || '').trim();
+    if (!acct) continue;
+    seen[acct] = true;
+    if (iActive >= 0 && String(values[i][iActive]).trim() === 'Active') sheetActive[acct] = true;
+  }
+  function acctActive(acct) {                                       // tool store wins; else the sheet flag
+    var m = meta[acct];
+    if (m && m.active !== null) return m.active;
+    return !!sheetActive[acct];
+  }
+
+  // Pass 2: rows for ACTIVE accounts only (unmanaged accounts never reach the browser).
+  var out = [];
+  for (var k = 0; k < values.length; k++) {
+    var r = values[k], a = String(r[iAcct] || '').trim();
+    if (!a || !acctActive(a)) continue;
     var d = normDateG(r[iDate]);
     if (!d || d < cutoff) continue;
     var o = {
-      d: d,
-      a: String(r[iAcct] || '').trim(),
+      d: d, a: a,
       c: String(r[iCamp] || '').trim(),
       db: iDB < 0 ? 0 : numv(r[iDB]),
       st: iStatus < 0 ? '' : String(r[iStatus] || '').trim(),
@@ -695,7 +730,18 @@ function readFbRows() {
     if (iBEnd   >= 0) { var be = normDateG(r[iBEnd]);   if (be) o.be = be; }
     out.push(o);
   }
-  return out;
+
+  // Full account roster (active + inactive) so the tool can list everything to
+  // manage, while only active accounts ship their data above.
+  var accounts = Object.keys(seen).map(function (acct) {
+    var m = meta[acct] || {};
+    return { account: acct, active: acctActive(acct), name: m.name || '' };
+  }).sort(function (x, y) {
+    var xn = (x.name || x.account).toLowerCase(), yn = (y.name || y.account).toLowerCase();
+    return xn < yn ? -1 : (xn > yn ? 1 : 0);
+  });
+
+  return { rows: out, accounts: accounts };
 }
 
 // Upsert one campaign budget (Account + Campaign + Month) in the MAIN sheet.
@@ -723,6 +769,56 @@ function setFbBudget(p) {
   sheet.getRange(target, 3).setValue(month);
   logChange_(p.by, 'Social', 'Campaign budget', account + (campaign ? (' · ' + campaign) : ''), month + ' · ' + mode + (Number(p.amount) ? (' · $' + (Number(p.amount) || 0)) : ''));
   return { ok: true, row: target };
+}
+
+/* ---- Facebook account management: active flag + display rename (tool-only) ---- */
+// { account: { active: true|false|null, name: '...' } }. active===null means the
+// tool hasn't decided, so readFbRows falls back to the sheet's Active column.
+function readFbAccountsMeta_() {
+  var map = {};
+  readTab(FB_ACCTS_TAB).forEach(function (r) {
+    var acct = String(r.Account || '').trim(); if (!acct) return;
+    var a = String(r.Active || '').trim().toLowerCase();
+    var active = (a === 'yes' || a === 'y' || a === 'true' || a === '1') ? true
+               : ((a === 'no' || a === 'n' || a === 'false' || a === '0') ? false : null);
+    map[acct] = { active: active, name: String(r.Name || '').trim() };
+  });
+  return map;
+}
+// Upsert one account's row. Passing null for active or name leaves that field as-is.
+function upsertFbAcct_(account, active, name) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sheet = ss.getSheetByName(FB_ACCTS_TAB) || ss.insertSheet(FB_ACCTS_TAB);
+  ensureHeader(sheet, FB_ACCTS_HEADER);
+  var values = sheet.getDataRange().getValues(), target = -1;
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0]).trim() === account) { target = i + 1; break; }
+  }
+  var existing = target > 0 ? values[target - 1] : [account, '', '', ''];
+  var act = (active == null) ? String(existing[1] || '') : (active ? 'yes' : 'no');
+  var nm  = (name   == null) ? String(existing[2] || '') : name;
+  var row = [account, act, nm, new Date().toISOString()];
+  if (target === -1) { sheet.appendRow(row); } else { sheet.getRange(target, 1, 1, row.length).setValues([row]); }
+}
+function setFbActive(p) {
+  requireSecret(p);
+  var account = String(p.account || '').trim();
+  if (!account) throw new Error('missing account');
+  var active = (String(p.active) === '1' || String(p.active).toLowerCase() === 'true');
+  upsertFbAcct_(account, active, null);
+  fbCacheClear_(CacheService.getScriptCache());          // served rows depend on the active set
+  logChange_(p.by, 'Social', 'Account ' + (active ? 'activated' : 'deactivated'), account, '');
+  return { ok: true };
+}
+function setFbRename(p) {
+  requireSecret(p);
+  var account = String(p.account || '').trim();
+  if (!account) throw new Error('missing account');
+  var name = String(p.name || '').trim();
+  upsertFbAcct_(account, null, name);
+  fbCacheClear_(CacheService.getScriptCache());          // account roster (incl. display name) is cached with the rows
+  logChange_(p.by, 'Social', 'Account rename', account, name ? ('→ ' + name) : '(cleared)');
+  return { ok: true };
 }
 
 /* ---- reads ---- */
