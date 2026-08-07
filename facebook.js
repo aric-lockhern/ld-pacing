@@ -30,6 +30,7 @@ state.fbCampaignsBy = state.fbCampaignsBy || {};
 state.fbRaw         = state.fbRaw || [];
 state.fbSlackFor    = state.fbSlackFor || null;
 if(state.fbFilter==null) state.fbFilter='';
+if(state.fbFilterDrops==null) state.fbFilterDrops=false;
 if(state.fbSave==null)       state.fbSave='idle';
 if(state.fbDetailDays==null) state.fbDetailDays=30;
 /* state.fbSource stays undefined until the first load */
@@ -65,7 +66,11 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
   + '.fbdailyfield input{border:none;outline:none;background:transparent;text-align:right;width:52px;padding:3px 2px;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink);}'
   + '.fbmohint{font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;}'
   + '.fbbud{font-size:9px;font-weight:700;color:var(--accent);background:var(--accent-bg);border-radius:4px;padding:1px 5px;white-space:nowrap;letter-spacing:.02em;}'
-  + '.fbautoval{display:inline-flex;align-items:center;gap:5px;font-size:14px;font-weight:650;font-variant-numeric:tabular-nums;color:var(--ink);}';
+  + '.fbautoval{display:inline-flex;align-items:center;gap:5px;font-size:14px;font-weight:650;font-variant-numeric:tabular-nums;color:var(--ink);}'
+  + '.fbautocell{cursor:pointer;border:1px solid transparent;border-radius:8px;padding:2px 6px;}'
+  + '.fbautocell:hover{border-color:var(--editline);background:var(--editbg);}'
+  + '.fbautocell:hover .fbautoval{color:var(--accent);}'
+  + '.fbedit{color:var(--accent);font-weight:700;}';
   var el=document.createElement('style'); el.textContent=css; document.head.appendChild(el);
 })();
 
@@ -260,6 +265,27 @@ function unitBurn(mtd, effBudget, daily){
     text:'Burning '+money(rate)+'/day — the '+money(remaining)+' left runs out around '+labelDate(iso)+' ('+e+' day'+(e===1?'':'s')+' early)' };
 }
 
+/* ---- spend collapse: an ACTIVE campaign whose daily spend suddenly stalled
+   (e.g. $16/day → $0.50/day). Compares the recent few days to the prior ~2
+   weeks; percentage + floor based so small budgets are caught too. ---- */
+var FB_DROP_RECENT=3, FB_DROP_BASE=14, FB_DROP_MINHIST=8, FB_DROP_FLOOR=5, FB_DROP_RATIO=0.4, FB_DROP_CRIT=0.15;
+function fbAvgCost(arr){ if(!arr.length) return 0; var s=0; arr.forEach(function(p){ s+=p.cost; }); return s/arr.length; }
+function campSpendDrop(camp){
+  if(!ctx().isLive || !fbIsActive(camp)) return null;               // only currently-active campaigns
+  var hist=camp.daily.filter(function(p){ return String(p.date)<todayIso(); });
+  if(hist.length < FB_DROP_MINHIST) return null;
+  var recent=hist.slice(-FB_DROP_RECENT);
+  var base=hist.slice(Math.max(0, hist.length-FB_DROP_RECENT-FB_DROP_BASE), hist.length-FB_DROP_RECENT);
+  if(base.length < 5) return null;
+  var r=fbAvgCost(recent), bs=fbAvgCost(base);
+  if(!(bs>=FB_DROP_FLOOR)) return null;                             // baseline must be meaningful
+  if(r > bs*FB_DROP_RATIO) return null;                            // not a real collapse
+  var pct=(r-bs)/bs;
+  function m2(v){ return v<10 ? ('$'+v.toFixed(2)) : money(v); }   // keep cents for small daily spends
+  return { level:(r<=bs*FB_DROP_CRIT?'critical':'warning'), recent:r, base:bs, pct:pct,
+    text:'Spend dropped '+Math.round(Math.abs(pct)*100)+'% — '+m2(r)+'/day recently vs '+m2(bs)+'/day before' };
+}
+
 // one bundle of everything a row needs
 function campDerive(camp){
   var view=aggMonth(camp.daily, state.viewMonth);
@@ -268,6 +294,7 @@ function campDerive(camp){
   p.wc=view.wc; p.fl=view.fl; p.val=view.val;
   p.roas = view.val>0 && view.cost>0 ? view.val/view.cost : null;
   p.budget=b; p.proj=unitProjection(camp.daily, eff); p.burn=unitBurn(view.cost, eff, camp.daily);
+  p.drop=campSpendDrop(camp);
   return p;
 }
 // Which campaigns to show for the current view month. Hide the clutter:
@@ -299,7 +326,17 @@ function acctDerive(acc){
   p.wc=wc; p.fl=fl; p.val=val; p.nCamps=camps.length;
   p.roas = val>0 && mtd>0 ? val/mtd : null;
   p.proj=unitProjection(daily, eff); p.burn=unitBurn(mtd, eff, daily);
+  var drop=null;   // worst spend-collapse among this account's visible campaigns
+  camps.forEach(function(c){ var dd=campSpendDrop(c); if(dd && (!drop || (dd.level==='critical'&&drop.level!=='critical'))) drop=dd; });
+  p.drop=drop;
   return p;
+}
+// Combined alert dot (spend collapse + budget burn) shown on account/campaign rows.
+function fbAlertDot(d){
+  if(!d.burn && !d.drop) return '';
+  var crit=(d.burn&&d.burn.level==='critical')||(d.drop&&d.drop.level==='critical');
+  var parts=[]; if(d.drop) parts.push('⚠ '+d.drop.text); if(d.burn) parts.push(d.burn.text);
+  return '<span class="alertdot '+(crit?'crit':'')+'" title="'+esc(parts.join(' · '))+'">⚠</span>';
 }
 
 /* ============================================================
@@ -324,6 +361,10 @@ FB.render = function(baseHtml){
   var accounts=(state.fbAccounts||[]).filter(function(a){ return acctVisibleCampaigns(a).length>0; });
   var fq=(state.fbFilter||'').trim().toLowerCase();
   if(fq) accounts=accounts.filter(function(a){ return a.account.toLowerCase().indexOf(fq)>=0; });
+  // spend-collapse count (campaigns), and optional filter to just those accounts
+  var dropCount=0, dropCrit=0;
+  accounts.forEach(function(a){ acctVisibleCampaigns(a).forEach(function(c){ var dd=campSpendDrop(c); if(dd){ dropCount++; if(dd.level==='critical') dropCrit++; } }); });
+  if(state.fbFilterDrops) accounts=accounts.filter(function(a){ return acctVisibleCampaigns(a).some(function(c){ return campSpendDrop(c); }); });
   // summary
   var t={mtd:0,forecast:0,budget:0,proj:0,wc:0,fl:0,val:0};
   accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); t.wc+=d.wc; t.fl+=d.fl; t.val+=d.val; });
@@ -344,7 +385,9 @@ FB.render = function(baseHtml){
   html += '<div class="toolbar"><div class="tcount">'
     + '<label class="acctfilter" title="Filter accounts by name"><span class="afic">🔎</span><input id="fb-acct-filter" placeholder="Filter accounts…" value="'+esc(state.fbFilter||'')+'">'+(state.fbFilter?'<button class="afclr" data-act="fb-clear-filter" title="Clear">×</button>':'')+'</label>'
     + 'Accounts <span class="badge">'+accounts.length+'</span>'
-    + '<span class="filtertag" title="Hidden: campaigns with 0 impressions this month, and paused campaigns with 0 spend this month.">Active + campaigns with data</span></div>'
+    + '<span class="filtertag" title="Hidden: campaigns with 0 impressions this month, and paused campaigns with 0 spend this month.">Active + campaigns with data</span>'
+    + ((dropCount>0||state.fbFilterDrops)?('<button class="filtertag issues'+(state.fbFilterDrops?' on':'')+(dropCrit?' hascrit':'')+'" data-act="fb-toggle-drops" title="Active campaigns whose daily spend suddenly dropped vs the prior 2 weeks">'+(dropCrit?'🚨':'⚠')+' Spend drops ('+dropCount+')</button>'):'')
+    + '</div>'
     + '<div class="tactions">'
     + (isLive?('<label class="dayctl">Day <input class="dayin" id="fb-day-input" inputmode="numeric" value="'+c.elapsed+'"> of '+c.dim+' <span class="daypct">· '+Math.round(c.elapsed/c.dim*100)+'%</span></label>'):'')
     + '<span class="saveind '+state.fbSave+'" id="fb-saveind">'+fbSaveText()+'</span>'
@@ -409,8 +452,9 @@ function fbStatsLine(d){
 function fbSlackModalHTML(){
   var tgt=fbSlackTarget(); if(!tgt) return '';
   var d=tgt.d, from=lsGet('lk_slackname','');
-  var pre = d.burn ? ((d.burn.level==='critical'?'🚨 ':'⚠ ')+d.burn.text) : '';
-  var alChip = d.burn ? '<div class="modal-alert '+(d.burn.level==='critical'?'critical':'warning')+'">Alert included — edit or add below</div>' : '';
+  var al = d.drop || d.burn;   // spend collapse takes priority in the note
+  var pre = al ? (((al.level==='critical')?'🚨 ':'⚠ ')+al.text) : '';
+  var alChip = al ? '<div class="modal-alert '+(al.level==='critical'?'critical':'warning')+'">Alert included — edit or add below</div>' : '';
   return '<div class="modal-overlay" data-act="fb-slack-cancel"><div class="modal">'
     + '<div class="modal-head"><span class="modal-title">Note to #pacing</span><button class="modal-x" data-act="fb-slack-cancel">×</button></div>'
     + '<div class="modal-acc">'+esc(tgt.name)+'</div><div class="modal-stats">'+esc(fbStatsLine(d))+'</div>'
@@ -493,7 +537,7 @@ function fbTrendTot(t,isLive){
 function acctRowHTML(a,isLive){
   var d=acctDerive(a), st=statusOf(d.pace), opn=!!state.fbOpen[a.account], cl=function(v){return isLive?v:'—';};
   var camps=acctVisibleCampaigns(a);
-  var burnDot = d.burn ? ('<span class="alertdot '+(d.burn.level==='critical'?'crit':'')+'" title="'+esc(d.burn.text)+'">⚠</span>') : '';
+  var burnDot = fbAlertDot(d);
   var html='<div class="fbblock'+(opn?' open':'')+'" data-fbarow="'+esc(a.account)+'">'
     + '<div class="fbgrid fbrow" data-act="fb-toggle" data-acct="'+esc(a.account)+'">'
     + '<div class="c-chev" style="justify-content:center"><span class="chev">▾</span></div>'
@@ -548,8 +592,10 @@ function campBudgetCell(camp,d,b,key){
   if(b.mode==='auto'){
     var typ=fbMetaType(camp);
     var sub = typ==='lifetime' ? (money(camp.lifetimeBudget,true)+' lifetime') : (money(camp.dailyBudget)+'/day');
-    return '<div class="fbdailycell"><div class="fbautoval">'+money(d.effBudget,true)+'<span class="lm">AUTO</span></div>'
-      +'<div class="fbmohint" title="Automatic — from the sheet’s reported budget">'+esc(sub)+'</div></div>';
+    // Clicking the auto value drops straight into an editable daily budget.
+    return '<div class="fbdailycell fbautocell" data-act="fb-to-daily" data-key="'+esc(key)+'" title="Automatic — from the sheet. Click to set a daily budget.">'
+      +'<div class="fbautoval">'+money(d.effBudget,true)+'<span class="lm">AUTO</span></div>'
+      +'<div class="fbmohint">'+esc(sub)+' · <span class="fbedit">edit</span></div></div>';
   }
   // daily
   var dv=campDailyVal(camp,b);
@@ -565,7 +611,7 @@ function campRowHTML(a,camp,isLive){
   var b=d.budget;
   var statusOn = String(camp.status||'').toUpperCase().indexOf('ACTIVE')>=0;
   var budgetCell = campBudgetCell(camp,d,b,key);
-  var burnDot = d.burn ? ('<span class="alertdot '+(d.burn.level==='critical'?'crit':'')+'" title="'+esc(d.burn.text)+'">⚠</span>') : '';
+  var burnDot = fbAlertDot(d);
   var html='<div class="fbcblock'+(opn?' open':'')+'" data-fbrow="'+esc(key)+'">'
     + '<div class="fbgrid fbcrow" data-act="fb-camp-toggle" data-key="'+esc(key)+'">'
     + '<div></div>'
@@ -735,6 +781,13 @@ document.addEventListener('click', function(e){
   var act=el.getAttribute('data-act');
   if(act==='fb-refresh'){ FB.load(true); }
   else if(act==='fb-clear-filter'){ state.fbFilter=''; render(); var fce=document.getElementById('fb-acct-filter'); if(fce) fce.focus(); }
+  else if(act==='fb-toggle-drops'){ state.fbFilterDrops=!state.fbFilterDrops; render(); }
+  else if(act==='fb-to-daily'){
+    var k=el.getAttribute('data-key');
+    fbSetBudget(k,{mode:'daily',amount:0});   // switch to editable daily (renders)
+    var din=document.querySelector('[data-fbrow="'+cssEscFb(k)+'"] .fb-daily-input');
+    if(din){ din.focus(); try{ din.select(); }catch(e){} }
+  }
   else if(act==='fb-toggle'){ var acct=el.getAttribute('data-acct'); state.fbOpen[acct]=!state.fbOpen[acct]; render(); }
   else if(act==='fb-camp-toggle'){ if(e.target.closest('[data-noexpand]')) return; var k=el.getAttribute('data-key'); state.fbCampOpen[k]=!state.fbCampOpen[k]; render(); }
   else if(act==='fb-to-manual'){ fbSetBudget(el.getAttribute('data-key'),{mode:'manual',amount:Number(el.getAttribute('data-amt'))||0}); }

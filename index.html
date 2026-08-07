@@ -1366,6 +1366,21 @@ function alertFor(a){
       }
     });
   }
+  // Spend collapse: recent few days vs the prior ~2 weeks. Percentage + floor
+  // based, so it catches smaller accounts the z-score check above skips (e.g.
+  // an account that was ~$16/day and basically stopped spending).
+  (function(){
+    if(res.reasons.some(function(x){return x.label==='Spend'&&x.dir==='down';})) return; // don't double-flag
+    var hist=[]; dates.forEach(function(dk){ hist.push(map[dk]); });
+    if(hist.length<8) return;
+    var recent=hist.slice(-3), base=hist.slice(Math.max(0,hist.length-3-14), hist.length-3);
+    if(base.length<5) return;
+    function av(arr){ var s=0; arr.forEach(function(p){s+=(p.spend||0);}); return arr.length?s/arr.length:0; }
+    var r=av(recent), bs=av(base);
+    if(!(bs>=10)) return;                 // baseline must be meaningful
+    if(r > bs*0.4) return;                // not a collapse
+    res.reasons.push({label:'Spend',dir:'down',critical:(r<=bs*0.15),base:bs,val:r,pct:(r-bs)/bs});
+  })();
   var down=res.reasons.filter(function(x){return x.dir==='down';});
   var up=res.reasons.filter(function(x){return x.dir==='up';});
   res.burn = burnInfo(a, derive(a));
