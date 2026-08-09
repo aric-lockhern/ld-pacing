@@ -1358,11 +1358,18 @@ function recentPace(a, d){
   var c=ctx();
   var target = d.effBudget>0 ? d.effBudget/c.dim : 0;
   if(!target) return out;
-  var daily=accountDaily(a.client).filter(function(p){ return String(p.date)<todayIso(); });
-  if(!daily.length) return out;
-  function avg(k){ var s=daily.slice(-k); if(!s.length) return null; var t=0; s.forEach(function(r){t+=r.spend;}); return t/s.length; }
+  var raw=accountDaily(a.client).filter(function(p){ return String(p.date)<todayIso(); });
+  if(!raw.length) return out;
+  // Calendar-fill through the freshest completed day across the portfolio, so a
+  // day the account spent $0 (no feed row) counts as $0 — not as "no data". This
+  // is why "yesterday" and the recent averages reflect real calendar days.
+  var _m={}; raw.forEach(function(p){ _m[String(p.date)]=p; });
+  var _end=raw[raw.length-1].date; if(state.searchMaxDate && state.searchMaxDate>_end) _end=state.searchMaxDate;
+  var daily=[], _it=raw[0].date;
+  while(_it<=_end){ daily.push(_m[_it]||{date:_it,spend:0}); _it=isoAdd(_it,1); }
+  function avg(k){ var s=daily.slice(-k); if(!s.length) return null; var t=0; s.forEach(function(r){t+=(r.spend||0);}); return t/s.length; }
   out.ok=true; out.target=target;
-  out.yesterday=daily[daily.length-1].spend;
+  out.yesterday=daily[daily.length-1].spend||0;
   out.yDate=daily[daily.length-1].date;
   out.avg3=avg(3); out.avg7=avg(7);
   out.days=daily.length;
@@ -1599,9 +1606,15 @@ function resolveBudget(client, monthKey){
 function makeXTicksIdx(rows){ var n=rows.length,k=Math.min(6,n),t=[]; for(var i=0;i<k;i++){ var idx=Math.round(i*(n-1)/((k-1)||1)); t.push({x:idx,label:labelDate(rows[idx].date)}); } return t; }
 function detailHTML(a,d){
   var days=state.detailDays||30;
-  var all=accountDaily(a.client).filter(function(p){ return String(p.date)<todayIso(); });
-  if(!all.length) return '';
-  var daily=all.slice(-days);
+  // Calendar-fill: the feed omits $0-spend days, so a drop to $0 (or an account
+  // that stopped spending) is otherwise invisible. Build a date->row map and walk
+  // a CONTINUOUS calendar through the freshest completed day across the portfolio
+  // (≈ yesterday); missing days render as $0.
+  var rich={}, dmin='';
+  accountDaily(a.client).forEach(function(p){ var k=String(p.date); if(k<todayIso()){ rich[k]=p; if(!dmin||k<dmin) dmin=k; } });
+  if(!dmin) return '';
+  var endRef = (state.searchMaxDate && state.searchMaxDate>=dmin) ? state.searchMaxDate : dmin;
+  var wStart = isoAdd(endRef, -(days-1)); if(wStart<dmin) wStart=dmin;
 
   // Expected curve + each day's target follow the DAY-OF-WEEK weighted shape
   // (weekend days get a low target, weekdays a high one) rather than a flat
@@ -1613,16 +1626,19 @@ function detailHTML(a,d){
     var ck=mk+'|'+amt, e=_expCache[ck]||(_expCache[ck]=dowExpected(a.client, mk, amt));
     return e.at(dayNum)-e.at(dayNum-1);
   }
-  var cum=0, cexp=0, clin=0;
-  var rows=daily.map(function(p,i){
+  var cum=0, cexp=0, clin=0, rows=[], _iso=wStart, _i=0;
+  while(_iso<=endRef){
+    var p=rich[_iso]||{date:_iso,spend:0,conv:0,clicks:0,impr:0,rev:0};
     cum+=p.spend;
-    var mk=String(p.date).slice(0,7), b=resolveBudget(a.client,mk);
+    var mk=_iso.slice(0,7), b=resolveBudget(a.client,mk);
     var amt=(b.mode==='lastMonth')?d.lastMoTotal:b.amount;
-    var dayNum=+String(p.date).slice(8,10), flat=(amt>0?amt/daysInMonthOf(mk):0), tgt=_expInc(mk,amt,dayNum);
+    var dayNum=+_iso.slice(8,10), flat=(amt>0?amt/daysInMonthOf(mk):0), tgt=_expInc(mk,amt,dayNum);
     cexp += tgt; clin += flat;
-    return { i:i, date:p.date, spend:p.spend, cum:cum, expected:cexp, expectedLinear:clin, target:tgt, conv:p.conv,
+    rows.push({ i:_i, date:_iso, spend:p.spend, cum:cum, expected:cexp, expectedLinear:clin, target:tgt, conv:p.conv,
              cpa:p.conv>0?p.spend/p.conv:null, rev:p.rev, roas:(p.rev>0&&p.spend>0)?p.rev/p.spend:null,
-             clicks:p.clicks, impr:p.impr }; });
+             clicks:p.clicks, impr:p.impr });
+    _iso=isoAdd(_iso,1); _i++;
+  }
   var n=rows.length, last=rows[n-1];
   var hasRev=isEcomm(a);
   var moneyY=function(v){return money(v,true);}, xFmt=function(v){return v.toFixed(1)+'x';};
