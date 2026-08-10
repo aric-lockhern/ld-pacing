@@ -69,7 +69,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 
 .tablewrap{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
 .tscroll{overflow-x:auto;}
-.grid{display:grid;grid-template-columns:30px 2.6fr .85fr .85fr 1.05fr 1.3fr .9fr 1fr .65fr .75fr .65fr 58px;align-items:center;gap:10px;padding:0 16px;min-width:1120px;}
+.grid{display:grid;grid-template-columns:30px 2.6fr .85fr 1.05fr 1.3fr .9fr 1fr .65fr .75fr .65fr 58px;align-items:center;gap:10px;padding:0 16px;min-width:1050px;}
 .trendnote.burn{font-weight:700;}
 .cell-trend{display:flex;flex-direction:column;align-items:flex-end;gap:1px;line-height:1.15;}
 .trendval{font-weight:650;font-variant-numeric:tabular-nums;}
@@ -299,7 +299,7 @@ table.bd tr:last-child td{border-bottom:none;}
   .stat{padding:11px 12px;}.stat-value{font-size:19px;}.pace-num{font-size:19px;}
   .toolbar{gap:8px;}.tcount{flex-wrap:wrap;}
   .grid,.fbgrid{grid-template-columns:1.7fr .8fr 1fr .9fr 34px !important;min-width:0 !important;gap:8px;padding:0 10px;}
-  .grid>*:nth-child(1),.grid>*:nth-child(4),.grid>*:nth-child(7),.grid>*:nth-child(8),.grid>*:nth-child(9),.grid>*:nth-child(10),.grid>*:nth-child(11){display:none !important;}
+  .grid>*:nth-child(1),.grid>*:nth-child(6),.grid>*:nth-child(7),.grid>*:nth-child(8),.grid>*:nth-child(9),.grid>*:nth-child(10){display:none !important;}
   .fbgrid>*:nth-child(1),.fbgrid>*:nth-child(4),.fbgrid>*:nth-child(7),.fbgrid>*:nth-child(8),.fbgrid>*:nth-child(9),.fbgrid>*:nth-child(10),.fbgrid>*:nth-child(11),.fbgrid>*:nth-child(12),.fbgrid>*:nth-child(13){display:none !important;}
   .row,.fbrow,.fbcrow{height:auto !important;min-height:48px;}
   .c-name{flex-wrap:wrap;align-items:center;row-gap:3px;padding:9px 0;}
@@ -318,7 +318,7 @@ table.bd tr:last-child td{border-bottom:none;}
 @media (max-width:360px){
   /* very narrow: drop the budget column too — edit budgets by tapping the row */
   .grid,.fbgrid{grid-template-columns:1.6fr .85fr .9fr 34px !important;}
-  .grid>*:nth-child(5),.fbgrid>*:nth-child(5){display:none !important;}
+  .grid>*:nth-child(4),.fbgrid>*:nth-child(5){display:none !important;}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none !important;}.spin{animation:none;}}
 button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
@@ -1071,11 +1071,10 @@ function render(){
         + '<div class="c-sel"><input type="checkbox" class="selall"'+(allSel?' checked':'')+' title="Select all"></div>'
         + th('Account','name','c-name')
         + th('MTD spend','mtd','c-num')
-        + th('Forecast','forecast','c-num')
         + th('Budget <span class="edithint">edit</span>','budget','c-budget')
         + th('Pace to budget','pace','c-pace')
         + th('Δ vs budget','variance','c-num')
-        + th('Trending to','trend','c-num')
+        + th('Forecast','trend','c-num')
         + th('Conv.','conv','c-num')
         + th('CPA','cpa','c-num')
         + th('ROAS','roas','c-num')
@@ -1085,7 +1084,6 @@ function render(){
         + '<div class="c-sel"></div>'
         + '<div class="c-name">Portfolio total</div>'
         + '<div class="c-num strong">'+cellL(money(t.mtd,true))+'</div>'
-        + '<div class="c-num" id="tot-forecast">'+cellL(money(t.forecast,true))+'</div>'
         + '<div class="c-budget total-budget" id="tot-budget">'+money(t.budget,true)+'</div>'
         + '<div class="c-pace" id="tot-pace">'+(isLive?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>')+'</div>'
         + '<div class="c-num '+(t.variance>0?'neg':'pos')+'" id="tot-var">'+(isLive&&t.variance!=null?((t.variance>0?'+':'')+money(t.variance,true)):'—')+'</div>'
@@ -1097,8 +1095,7 @@ function render(){
     html+='</div></div>';
   }
 
-  html+='<div class="foot"><span>Forecast = MTD spend ÷ days elapsed × days in month.</span><span class="foot-dot">·</span>'
-      + '<span>Trending to = spent so far + recent '+RATE_DAYS+'-day daily rate × days left.</span><span class="foot-dot">·</span>'
+  html+='<div class="foot"><span>Forecast = spent so far + the recent daily pace projected across the remaining days (day-of-week weighted).</span><span class="foot-dot">·</span>'
       + '<span><b class="t-good">On pace</b> 90–110% · <b class="t-under">Under</b> &lt;90% · <b class="t-over">Over</b> &gt;110%.</span><span class="foot-dot">·</span>'
       + '<span>Budgets save to the sheet for the whole team.</span></div>';
 
@@ -1189,7 +1186,6 @@ function rowHTML(a,isLive){
       + (dc?'<span class="tag disc '+dc+'" title="'+(dc==='strict'?'Strict budget — hold to it':'Fluid budget — over/under is ok')+'">'+dc+'</span>':'')
       + (a.hidden?'<span class="tag hiddentag">hidden</span>':'')+'</span></div>'
     + '<div class="c-num strong cell-mtd">'+cl(money(d.mtd,true))+'</div>'
-    + '<div class="c-num cell-forecast">'+cl(money(d.forecast,true))+'</div>'
     + '<div class="c-budget cell-budget" data-noexpand="1">'+budgetCell+'</div>'
     + '<div class="c-pace cell-pace">'+(isLive?('<span class="pacepct t-'+st+'">'+pct(d.pace)+'</span>'+trendBadge(a,d)+meterHTML(d.pace,st)):'<span class="pace-na">—</span>')+'</div>'
     + '<div class="c-num cell-var '+(d.variance>0?'neg':'pos')+'">'+(isLive&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
@@ -1723,7 +1719,6 @@ function updateComputed(client){
 function updateTotals(){
   var vis=visibleAccounts(), t=totals(vis.list), isLive=state.viewMonth===state.liveKey;
   set('tot-budget',money(t.budget,true));
-  set('tot-forecast',isLive?money(t.forecast,true):'—');
   set('tot-var',isLive&&t.variance!=null?((t.variance>0?'+':'')+money(t.variance,true)):'—');
   var tp=document.getElementById('tot-pace'); if(tp){ tp.innerHTML=isLive?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>'; }
   var vv=document.getElementById('tot-var'); if(vv){ vv.className='c-num '+(t.variance>0?'neg':'pos'); }
