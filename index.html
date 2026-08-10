@@ -776,7 +776,17 @@ function projection(a,d){
   var dp = d.dow || dowProject(a.client, spent);
   var rate, proj, weighted=false;
   if(dp){ rate=dp.baseline; proj=spent+dp.add; weighted=true; }
-  else { var recent=daily.slice(-RATE_DAYS), rr=0; recent.forEach(function(p){ rr+=p.spend; }); rate=recent.length?rr/recent.length:0; proj=spent+rate*daysLeft; }
+  else {
+    // Flat fallback (limited history): use the recent CALENDAR pace over a full
+    // week, so days the account spent $0 (e.g. weekends it doesn't run) count.
+    // Otherwise the active-day rate gets applied to every remaining day and
+    // over-projects. 7 days is day-of-week balanced and matches the runway.
+    var _m={}; daily.forEach(function(p){ _m[String(p.date)]=p; });
+    var _end=daily[daily.length-1].date; if(state.searchMaxDate && state.searchMaxDate>_end) _end=state.searchMaxDate;
+    var fill=[], _it=daily[0].date; while(_it<=_end){ fill.push((_m[_it]&&_m[_it].spend)||0); _it=isoAdd(_it,1); }
+    var rN=fill.slice(-7), rr=0; rN.forEach(function(v){ rr+=v; }); rate=rN.length?rr/rN.length:0;
+    proj=spent+rate*daysLeft;
+  }
   var pct = d.effBudget>0 ? proj/d.effBudget : null;
   return { proj:proj, rate:rate, daysLeft:daysLeft, spent:spent, pct:pct, weighted:weighted,
            gap:(d.effBudget>0 ? proj-d.effBudget : null), days:(dp?DOW_BASE_DAYS:RATE_DAYS) };
@@ -1393,7 +1403,7 @@ function recentPace(a, d){
   out.remaining = d.effBudget - d.mtd;
   out.daysLeft = Math.max(0, c.dim - c.elapsed);
   out.allowed = out.daysLeft>0 ? Math.max(0,out.remaining)/out.daysLeft : null;
-  out.rate = (out.avg3!=null) ? out.avg3 : out.yesterday;   // current burn rate
+  out.rate = (out.avg7!=null) ? out.avg7 : (out.avg3!=null ? out.avg3 : out.yesterday);   // burn rate: 7-day = day-of-week balanced
   out.runoutDays = (out.remaining>0 && out.rate>0) ? out.remaining/out.rate : null;
   return out;
 }
