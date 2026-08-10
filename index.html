@@ -639,7 +639,7 @@ function ctx(){
 // = window for the recent spend LEVEL that drives "trending to". The level window
 // is kept short so the projection follows a recent budget change / correction
 // instead of lagging a week behind it.
-var DOW_LOOKBACK=28, DOW_BASE_DAYS=10, DOW_CLAMP=3.0, DOW_MIN_OBS=2, DOW_MAD_K=3, DOW_CEIL_MULT=1.10, DOW_ACTIVE_FLOOR=5;
+var DOW_LOOKBACK=28, DOW_BASE_DAYS=7, DOW_CLAMP=3.0, DOW_MIN_OBS=2, DOW_MAD_K=3, DOW_CEIL_MULT=1.10, DOW_ACTIVE_FLOOR=5;
 function dowIdx(iso){ return new Date(iso+'T00:00:00').getDay(); }      // 0=Sun..6=Sat
 function _median(a){ if(!a.length) return 0; var s=a.slice().sort(function(x,y){return x-y;}); var m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; }
 var _dowCache={};
