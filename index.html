@@ -1528,17 +1528,19 @@ function alertFor(a){
   // an account that was ~$16/day and basically stopped spending).
   (function(){
     if(res.reasons.some(function(x){return x.label==='Spend'&&x.dir==='down';})) return; // don't double-flag
-    if(dates.length<8) return;            // need enough history to have a baseline
+    if(dates.length<10) return;           // need enough history for a stable baseline
     var ref=state.searchMaxDate; if(!ref) return;
-    // Read spend by CALENDAR day (missing export row = $0), measured against the
-    // freshest completed date across the portfolio — so an account that simply
-    // stopped delivering (no rows since) still gets caught, not just one whose
-    // remaining data-days declined.
+    // Spend by CALENDAR day (missing export row = $0), measured against the freshest
+    // completed date across the portfolio. A 7-DAY recent window is day-of-week
+    // BALANCED (a full week always spans the weekend), so an account that simply
+    // spends less on weekends doesn't read as a collapse — only a genuine week-long
+    // stall does. Floor + 65% threshold keep low-volume, erratic accounts (whose
+    // day-to-day swings aren't real signal) from cluttering the list.
     var cm={}; dates.forEach(function(dk){ cm[dk]=(map[dk].spend||0); });
     function wav(endIso,n){ var s=0; for(var i=0;i<n;i++){ s+=(cm[isoAdd(endIso,-i)]||0); } return s/n; }
-    var r=wav(ref,3), bs=wav(isoAdd(ref,-3),14);
-    if(!(bs>=10)) return;                 // baseline must be meaningful
-    if(r > bs*0.4) return;                // not a collapse
+    var r=wav(ref,7), bs=wav(isoAdd(ref,-7),14);
+    if(!(bs>=40)) return;                 // baseline must be a real spender, not low-volume noise
+    if(r > bs*0.35) return;               // must be a genuine collapse (65%+ below the trailing baseline)
     res.reasons.push({label:'Spend',dir:'down',critical:(r<=bs*0.15),base:bs,val:r,pct:(r-bs)/bs});
   })();
   var down=res.reasons.filter(function(x){return x.dir==='down';});
