@@ -299,10 +299,13 @@ function unitBurn(mtd, effBudget, daily){
     text:'Burning '+money(rate)+'/day — the '+money(remaining)+' left runs out around '+labelDate(iso)+' ('+e+' day'+(e===1?'':'s')+' early)' };
 }
 
-/* ---- spend collapse: an ACTIVE campaign whose daily spend suddenly stalled
-   (e.g. $16/day → $0.50/day). Compares the recent few days to the prior ~2
-   weeks; percentage + floor based so small budgets are caught too. ---- */
-var FB_DROP_RECENT=3, FB_DROP_BASE=14, FB_DROP_MINHIST=8, FB_DROP_FLOOR=5, FB_DROP_RATIO=0.4, FB_DROP_CRIT=0.15;
+/* ---- spend collapse: an ACTIVE campaign whose daily spend stalled for a week.
+   Compares a 7-DAY recent window (day-of-week balanced — a full week always
+   spans the weekend, so campaigns that just spend less on weekends don't
+   false-alarm) to the prior ~2 weeks; percentage + floor based. Mirrors the
+   Search-side collapse rule. Trade-off: a campaign that stops mid-week takes a
+   few days to trip, rather than firing on a single low weekend. ---- */
+var FB_DROP_RECENT=7, FB_DROP_BASE=14, FB_DROP_MINHIST=18, FB_DROP_FLOOR=15, FB_DROP_RATIO=0.35, FB_DROP_CRIT=0.15;
 // date -> total cost, so we can read spend by CALENDAR day (a day with no export
 // row = $0 spent, which is the whole point: a stopped campaign has missing days).
 function fbCostMap(daily){ var m={}; (daily||[]).forEach(function(p){ var k=String(p.date); m[k]=(m[k]||0)+p.cost; }); return m; }
