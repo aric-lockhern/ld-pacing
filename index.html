@@ -635,7 +635,11 @@ function ctx(){
    we can NOT tell "scheduled to serve but delivered nothing" (that needs the
    Google Ads ad-schedule feed). Confidence is gated + old linear kept as a
    secondary field, so a thin/odd history falls back to today's behavior.  */
-var DOW_LOOKBACK=28, DOW_BASE_DAYS=14, DOW_CLAMP=3.0, DOW_MIN_OBS=2, DOW_MAD_K=3, DOW_CEIL_MULT=1.10, DOW_ACTIVE_FLOOR=5;
+// DOW_LOOKBACK = window for learning the day-of-week SHAPE (stable); DOW_BASE_DAYS
+// = window for the recent spend LEVEL that drives "trending to". The level window
+// is kept short so the projection follows a recent budget change / correction
+// instead of lagging a week behind it.
+var DOW_LOOKBACK=28, DOW_BASE_DAYS=10, DOW_CLAMP=3.0, DOW_MIN_OBS=2, DOW_MAD_K=3, DOW_CEIL_MULT=1.10, DOW_ACTIVE_FLOOR=5;
 function dowIdx(iso){ return new Date(iso+'T00:00:00').getDay(); }      // 0=Sun..6=Sat
 function _median(a){ if(!a.length) return 0; var s=a.slice().sort(function(x,y){return x-y;}); var m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; }
 var _dowCache={};
@@ -665,8 +669,13 @@ function _dowBuild(client){
     var med=_median(sp), dev=sp.map(function(v){return Math.abs(v-med);}), mad=_median(dev);
     rows.forEach(function(p){
       var s=p.spend||0;
-      if(mad>0 && Math.abs(s-med) > DOW_MAD_K*1.4826*mad){ excluded.push({date:p.date,reason:(s<med?'dark_day_active_weekday':'spike_outlier')}); return; }
-      if((p.impr||0)===0 && med>DOW_ACTIVE_FLOOR){ excluded.push({date:p.date,reason:'zero_impressions_active_weekday'}); return; }
+      // Drop only genuine anomalies, never a day that simply spent LESS: an
+      // implausibly HIGH spike (tracking glitch), or a zero-delivery day (paused /
+      // out of budget) on a weekday that normally serves. A sustained lower level
+      // is a real budget change / correction and MUST be kept — otherwise the
+      // baseline stays anchored to the old spend and the forecast never catches up.
+      if(mad>0 && s-med > DOW_MAD_K*1.4826*mad){ excluded.push({date:p.date,reason:'spike_outlier'}); return; }
+      if((p.impr||0)===0 && med>DOW_ACTIVE_FLOOR){ excluded.push({date:p.date,reason:'zero_delivery_day'}); return; }
       clean[dw].push(s);
     });
   }
@@ -689,11 +698,16 @@ function _dowBuild(client){
   // Level estimate: weight-normalized mean of the trailing clean days, so it
   // isn't skewed by which weekdays happen to fall in the window.
   var bstart=isoAdd(end,-(DOW_BASE_DAYS-1)), exSet={}; excluded.forEach(function(e){ exSet[e.date]=1; });
-  var norm=[], recentMax=0;
+  // Level = Σspend / Σweight over the trailing clean days (NOT the mean of
+  // spend/weight). A weighted average reproduces the window's real total exactly
+  // and is day-of-week neutral; mean-of-ratios divides a low-weight weekend's
+  // spend by ~0.1 and averages that huge number in equally, biasing the baseline
+  // (and therefore the whole forecast) far too high for weekday-heavy accounts.
+  var sumSpend=0, sumW=0, recentMax=0;
   all.forEach(function(p){ if(String(p.date)<bstart) return; if(exSet[p.date]) return;
-    var w=weights[dowIdx(p.date)]; if(w>0.05) norm.push((p.spend||0)/w);
+    var w=weights[dowIdx(p.date)]; if(w>0.05){ sumSpend+=(p.spend||0); sumW+=w; }
     if((p.spend||0)>recentMax) recentMax=p.spend; });
-  var baseline = norm.length ? norm.reduce(function(s,v){return s+v;},0)/norm.length : meanAll;
+  var baseline = sumW>0 ? sumSpend/sumW : meanAll;
   // Delivery-ceiling proxy: we lack the sum of enabled daily budgets, so cap any
   // single projected day at the recent peak actual daily spend ×1.10 — keeps a
   // delivery-limited account from over-forecasting. (True ceiling needs budgets.)
