@@ -91,7 +91,11 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
   + '.mac-state{flex:0 0 auto;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;border-radius:4px;padding:2px 6px;}'
   + '.mac-state.on{color:var(--good);background:var(--good-bg);}'
   + '.mac-state.off{color:var(--faint);background:var(--line2);}'
-  + '.mac-empty{padding:18px;text-align:center;color:var(--faint);font-size:13px;}';
+  + '.mac-empty{padding:18px;text-align:center;color:var(--faint);font-size:13px;}'
+  // sortable Social headers (Search uses .head .sortable; the FB table is .fbhead)
+  + '.fbhead .sortable{cursor:pointer;user-select:none;}'
+  + '.fbhead .sortable:hover{color:var(--muted);}'
+  + '.fbhead .sort-active{color:var(--ink);}';
   var el=document.createElement('style'); el.textContent=css; document.head.appendChild(el);
 })();
 
@@ -389,6 +393,36 @@ function fbAlertDot(d){
   return '<span class="alertdot '+(crit?'crit':'')+'" title="'+esc(parts.join(' · '))+'">⚠</span>';
 }
 
+/* ---- column sorting (click a header) — mirrors the Search tab ---- */
+function fbToggleSort(key){
+  var s=state.fbSort||(state.fbSort={key:null,dir:'desc'});
+  if(s.key===key) s.dir = s.dir==='asc' ? 'desc' : 'asc';
+  else { s.key=key; s.dir = key==='name' ? 'asc' : 'desc'; }   // names A→Z, numbers high→low
+}
+function fbTh(label,key,cls){
+  var s=state.fbSort||{}, active=s.key===key, arrow=active?(s.dir==='asc'?' ▲':' ▼'):'';
+  return '<div class="'+cls+' sortable'+(active?' sort-active':'')+'" data-act="fb-sort" data-key="'+esc(key)+'">'+label+arrow+'</div>';
+}
+function fbSortVal(acc,key){
+  if(key==='name') return fbDisplayName(acc.account);
+  var d=acctDerive(acc);
+  if(key==='trend') return d.proj?d.proj.proj:null;
+  return { mtd:d.mtd, forecast:d.forecast, budget:d.effBudget, pace:d.pace, variance:d.variance,
+           wc:d.wc, leads:d.leads, cpl:d.cpl, val:d.val, roas:d.roas }[key];
+}
+function fbSortAccounts(list){
+  var s=state.fbSort; if(!s||!s.key) return list;
+  return list.slice().sort(function(a,b){
+    var va=fbSortVal(a,s.key), vb=fbSortVal(b,s.key);
+    var na=(va==null||(typeof va==='number'&&!isFinite(va)));
+    var nb=(vb==null||(typeof vb==='number'&&!isFinite(vb)));
+    if(na&&nb) return a.account.localeCompare(b.account);
+    if(na) return 1; if(nb) return -1;                          // blanks sink to the bottom
+    var cmp = typeof va==='string' ? va.toLowerCase().localeCompare(vb.toLowerCase()) : va-vb;
+    return s.dir==='asc' ? cmp : -cmp;
+  });
+}
+
 /* ============================================================
    RENDER
    ============================================================ */
@@ -458,13 +492,15 @@ FB.render = function(baseHtml){
   }
 
   html += '<div class="tablewrap"><div class="tscroll"><div class="fbgrid fbhead">'
-    + '<div></div><div class="c-name">Account / Campaign</div>'
-    + '<div class="c-num">MTD spend</div><div class="c-num">Forecast</div>'
-    + '<div class="c-budget">Budget</div><div class="c-pace">Pace to budget</div>'
-    + '<div class="c-num">Δ vs budget</div><div class="c-num">Trending to</div>'
-    + '<div class="c-num">Conversions</div><div class="c-num">Leads</div><div class="c-num">CPL</div><div class="c-num">Revenue</div><div class="c-num">ROAS</div><div></div></div>';
+    + '<div></div>'
+    + fbTh('Account / Campaign','name','c-name')
+    + fbTh('MTD spend','mtd','c-num') + fbTh('Forecast','forecast','c-num')
+    + fbTh('Budget','budget','c-budget') + fbTh('Pace to budget','pace','c-pace')
+    + fbTh('Δ vs budget','variance','c-num') + fbTh('Trending to','trend','c-num')
+    + fbTh('Conversions','wc','c-num') + fbTh('Leads','leads','c-num') + fbTh('CPL','cpl','c-num')
+    + fbTh('Revenue','val','c-num') + fbTh('ROAS','roas','c-num') + '<div></div></div>';
 
-  accounts.forEach(function(a){ html += acctRowHTML(a,isLive); });
+  fbSortAccounts(accounts).forEach(function(a){ html += acctRowHTML(a,isLive); });
 
   // totals
   html += '<div class="fbgrid totalrow"><div></div><div class="c-name">Facebook total</div>'
@@ -911,6 +947,7 @@ document.addEventListener('click', function(e){
   var el=e.target.closest('[data-act]'); if(!el) return;
   var act=el.getAttribute('data-act');
   if(act==='fb-refresh'){ FB.load(true); }
+  else if(act==='fb-sort'){ fbToggleSort(el.getAttribute('data-key')); render(); }
   else if(act==='fb-clear-filter'){ state.fbFilter=''; render(); var fce=document.getElementById('fb-acct-filter'); if(fce) fce.focus(); }
   else if(act==='fb-toggle-drops'){ state.fbFilterDrops=!state.fbFilterDrops; render(); }
   else if(act==='fb-to-daily'){
