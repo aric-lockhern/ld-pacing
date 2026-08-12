@@ -55,6 +55,9 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .acctfilter input{border:none;outline:none;background:transparent;font-size:13px;font-weight:500;font-family:inherit;color:var(--ink);width:160px;}
 .acctfilter .afclr{cursor:pointer;color:var(--faint);font-size:15px;line-height:1;border:none;background:none;padding:0 2px;}
 .acctfilter .afclr:hover{color:var(--ink);}
+.mgrfilter{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:4px 8px;}
+.mgrfilter .afic{font-size:12px;opacity:.7;}
+.mgrfilter select{border:none;outline:none;background:transparent;font-size:13px;font-weight:600;font-family:inherit;color:var(--ink);cursor:pointer;max-width:150px;}
 .badge{display:inline-block;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:1px 9px;font-size:12px;font-variant-numeric:tabular-nums;}
 .filtertag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-bg);border-radius:20px;padding:2px 9px;}
 .tactions{display:flex;align-items:center;gap:9px;}
@@ -838,6 +841,7 @@ function visibleAccounts(){
   });
   var q=(state.filter||'').trim().toLowerCase();
   if(q) list=list.filter(function(a){ return a.client.toLowerCase().indexOf(q)>=0; });
+  if(state.filterMgr) list=list.filter(function(a){ return mgrName(accountManager(a))===state.filterMgr; });   // owner dropdown
   if(state.filterIssues) list=list.filter(function(a){ return alertFor(a).flagged; });
   if(state.filterWins) list=list.filter(function(a){ return alertFor(a).positive; });
   return { list:list, anyLabels:anyLabels };
@@ -1042,6 +1046,15 @@ function render(){
   var manualHidden=0; state.accounts.forEach(function(a){ if(a.hidden) manualHidden++; });
   html+='<div class="toolbar"><div class="tcount">'
       + '<label class="acctfilter" title="Filter accounts by name"><span class="afic">🔎</span><input id="acct-filter" placeholder="Filter accounts…" value="'+esc(state.filter||'')+'">'+(state.filter?'<button class="afclr" data-act="clear-filter" title="Clear">×</button>':'')+'</label>'
+      + (function(){
+          var names={}; state.accounts.forEach(function(a){ var n=mgrName(accountManager(a)); if(n) names[n]=true; });
+          var owners=Object.keys(names).sort(function(x,y){ return x.toLowerCase()<y.toLowerCase()?-1:1; });
+          if(!owners.length) return '';
+          return '<label class="mgrfilter" title="Filter by account owner"><span class="afic">👤</span><select id="mgr-filter">'
+            + '<option value="">All owners</option>'
+            + owners.map(function(n){ return '<option value="'+esc(n)+'"'+(state.filterMgr===n?' selected':'')+'>'+esc(n)+'</option>'; }).join('')
+            + '</select></label>';
+        })()
       + 'Accounts <span class="badge">'+list.length+'</span>'
       + '<button class="filtertag'+(state.showAll?' on':'')+'" data-act="toggle-all">🏷 '+(state.showAll?'Showing all':'Active only')+'</button>'
       + ((issueCount>0||state.filterIssues)?('<button class="filtertag issues'+(state.filterIssues?' on':'')+(critCount?' hascrit':'')+'" data-act="toggle-issues">'+(critCount?'🚨':'⚠')+' Issues ('+issueCount+')</button>'):'')
@@ -1793,6 +1806,8 @@ document.addEventListener('change', function(e){
     var cl=e.target.getAttribute('data-client');
     if(e.target.checked) state.selected[cl]=true; else delete state.selected[cl];
     render();
+  } else if(e.target.id==='mgr-filter'){
+    state.filterMgr=e.target.value; render();
   } else if(e.target.classList.contains('mgr-select')){
     var mc=e.target.getAttribute('data-client'), ma=accountByClient(mc);
     if(ma) setManagerClient(ma, e.target.value);
