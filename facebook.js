@@ -249,6 +249,9 @@ function campEffBudget(camp, b){
   b = b || campGetBudget(camp);
   var c=ctx(), daysLeft=Math.max(0, c.dim - c.elapsed);
   var mtd=aggMonth(camp.daily, state.viewMonth).cost;
+  // Paused mid-month with spend already on the board: it won't spend any more,
+  // so the budget it paces against is exactly what it spent — no projection.
+  if(c.isLive && !fbIsActive(camp) && mtd>0) return mtd;
   if(b.mode==='manual')    return b.amount;
   if(b.mode==='lastMonth') return aggMonth(camp.daily, shiftKey(state.viewMonth,-1)).cost;
   if(b.mode==='lifetime')  return lifetimeMonthly(camp, (b.amount>0?b.amount:camp.lifetimeBudget));
@@ -347,6 +350,19 @@ function campDerive(camp){
   p.roas = view.val>0 && view.cost>0 ? view.val/view.cost : null;
   p.budget=b; p.proj=unitProjection(camp.daily, eff); p.burn=unitBurn(view.cost, eff, camp.daily);
   p.drop=campSpendDrop(camp);
+  // Paused mid-month: no more projection. Forecast/trending = what it already
+  // spent, pace lands at 100% of that spend, and no burn/over-budget alert.
+  var cc=ctx();
+  if(cc.isLive && !fbIsActive(camp) && view.cost>0){
+    var dl=Math.max(0, cc.dim - cc.elapsed);
+    p.forecast=view.cost;
+    p.pace = eff>0 ? view.cost/eff : null;
+    p.variance = eff>0 ? view.cost-eff : null;
+    p.proj = { proj:view.cost, rate:0, daysLeft:dl, spent:view.cost, days:0, paused:true,
+               pct:(eff>0?view.cost/eff:null), gap:(eff>0?view.cost-eff:null) };
+    p.burn = null;
+    p.paused = true;
+  }
   return p;
 }
 // Which campaigns to show for the current view month. Hide the clutter:
@@ -365,23 +381,35 @@ function campVisible(camp){
 function acctVisibleCampaigns(acc){ return (acc.campaigns||[]).filter(campVisible); }
 
 function acctDerive(acc){
-  // account = rollup of its VISIBLE campaigns only; budget = sum of their budgets
-  var camps=acctVisibleCampaigns(acc);
-  var eff=0, mtd=0, wc=0, fl=0, rc=0, val=0, mm={};
+  // account = rollup of its VISIBLE campaigns. Forecast/trending are the SUM of
+  // the per-campaign values (not a whole-account extrapolation), so a paused
+  // campaign contributes only what it spent — no forward projection. For all-
+  // active accounts this is identical to the old linear rollup.
+  var camps=acctVisibleCampaigns(acc), live=ctx().isLive;
+  var eff=0, mtd=0, wc=0, fl=0, rc=0, val=0, fcast=0, projSum=0, aEff=0, aMtd=0, mm={}, amm={}, drop=null;
   camps.forEach(function(c){
-    var b=campGetBudget(c); eff+=campEffBudget(c,b);
-    var a=aggMonth(c.daily, state.viewMonth); mtd+=a.cost; wc+=a.wc; fl+=a.fl; rc+=a.rc; val+=a.val;
-    c.daily.forEach(function(p){ var d=mm[p.date]||(mm[p.date]={date:p.date,cost:0}); d.cost+=p.cost; });
+    var cd=campDerive(c);
+    eff+=cd.effBudget; mtd+=cd.mtd; wc+=cd.wc; fl+=cd.fl; rc+=cd.rc; val+=cd.val;
+    if(live){ fcast += (cd.forecast!=null?cd.forecast:cd.mtd); projSum += (cd.proj?cd.proj.proj:cd.mtd); }
+    c.daily.forEach(function(p){ (mm[p.date]||(mm[p.date]={date:p.date,cost:0})).cost+=p.cost; });
+    if(fbIsActive(c)){ aEff+=cd.effBudget; aMtd+=cd.mtd; c.daily.forEach(function(p){ (amm[p.date]||(amm[p.date]={date:p.date,cost:0})).cost+=p.cost; }); }
+    if(cd.drop && (!drop || (cd.drop.level==='critical'&&drop.level!=='critical'))) drop=cd.drop;
   });
   var daily=Object.keys(mm).map(function(k){return mm[k];}).sort(byDate);
-  var p=unitPace(mtd, eff, daily);
+  var activeDaily=Object.keys(amm).map(function(k){return amm[k];}).sort(byDate);
+  var forecast = live ? fcast : null;
+  var p={ forecast:forecast, effBudget:eff, mtd:mtd,
+          pace:(eff>0&&forecast!=null)?forecast/eff:null,
+          variance:(forecast!=null)?forecast-eff:null };
   p.wc=wc; p.fl=fl; p.rc=rc; p.val=val; p.nCamps=camps.length;
   p.leads = fl + rc;
   p.cpl = (p.leads>0 && mtd>0) ? mtd/p.leads : null;
   p.roas = val>0 && mtd>0 ? val/mtd : null;
-  p.proj=unitProjection(daily, eff); p.burn=unitBurn(mtd, eff, daily);
-  var drop=null;   // worst spend-collapse among this account's visible campaigns
-  camps.forEach(function(c){ var dd=campSpendDrop(c); if(dd && (!drop || (dd.level==='critical'&&drop.level!=='critical'))) drop=dd; });
+  var dl=Math.max(0, ctx().dim-ctx().elapsed);
+  p.proj = live ? { proj:projSum, rate:null, daysLeft:dl, spent:mtd, days:0,
+                    pct:(eff>0?projSum/eff:null), gap:(eff>0?projSum-eff:null) } : null;
+  // Burn (runout) concerns only campaigns still spending — paused ones can't run out.
+  p.burn = unitBurn(aMtd, aEff, activeDaily);
   p.drop=drop;
   return p;
 }
@@ -660,12 +688,16 @@ function fbReloadAccounts(){
 
 function trendCellHTML(proj, burn){
   if(!proj) return '<div class="c-num cell-trend">—</div>';
-  var st = burn ? 'over' : statusOf(proj.pct);
-  var note = burn ? burn.tag
+  var st = proj.paused ? 'good' : (burn ? 'over' : statusOf(proj.pct));
+  var note = proj.paused ? 'paused'
+    : burn ? burn.tag
     : (proj.pct==null ? 'no budget'
       : (st==='good' ? 'on track'
       : (proj.gap>0 ? '+'+money(proj.gap,true)+' over' : money(Math.abs(proj.gap),true)+' under')));
-  var tip = burn ? burn.text : ('At the recent rate: '+money(proj.spent,true)+' spent + '+money(proj.rate)+'/day × '+proj.daysLeft+' left');
+  var tip = proj.paused ? ('Paused — no more spend projected; landed at '+money(proj.proj,true))
+    : burn ? burn.text
+    : (proj.rate==null ? ('Projected month-end spend: '+money(proj.proj,true))
+      : ('At the recent rate: '+money(proj.spent,true)+' spent + '+money(proj.rate)+'/day × '+proj.daysLeft+' left'));
   return '<div class="c-num cell-trend" title="'+esc(tip)+'"><span class="trendval t-'+st+'">'+money(proj.proj,true)+'</span>'
     + '<span class="trendnote t-'+st+(burn?' burn':'')+'">'+esc(note)+'</span></div>';
 }
