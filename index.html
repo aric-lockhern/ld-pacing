@@ -370,21 +370,40 @@ var state = {
 };
 var saveTimers = {};
 
-/* ---- JSONP (works cross-origin, keeps the sheet private) ---- */
-function jsonp(params, timeoutMs){
+/* ---- gateway request: JSONP <script> first (works cross-origin, keeps the
+   sheet private), with a fetch() fallback for browsers/profiles where Chrome's
+   ORB (Opaque Response Blocking) blocks the JSONP <script> response. The gateway
+   returns plain JSON when no callback is passed, and cross-origin GET responses
+   from Apps Script are CORS-readable, so fetch sidesteps ORB entirely. ---- */
+function jsonpQuery(params, cb){
+  var q = Object.assign({}, params, { secret: SECRET });
+  if(cb) q.callback = cb;
+  if((params.action||'').indexOf('set')===0) q.by = lsGet('lk_slackname','');   // stamp who made the change
+  return Object.keys(q).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(q[k]); }).join('&');
+}
+function jsonpScript(params, timeoutMs){
   return new Promise(function(resolve, reject){
     var cb = 'cb_' + Math.random().toString(36).slice(2);
     var script = document.createElement('script');
     var timer = setTimeout(function(){ cleanup(); reject(new Error('timeout')); }, timeoutMs||20000);
     function cleanup(){ clearTimeout(timer); try{ delete window[cb]; }catch(e){ window[cb]=undefined; } if(script.parentNode) script.parentNode.removeChild(script); }
     window[cb] = function(data){ cleanup(); resolve(data); };
-    var q = Object.assign({}, params, { callback: cb, secret: SECRET });
-    if((params.action||'').indexOf('set')===0) q.by = lsGet('lk_slackname','');   // stamp who made the change
-    var qs = Object.keys(q).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(q[k]); }).join('&');
-    script.src = WEBAPP_URL + '?' + qs;
-    script.onerror = function(){ cleanup(); reject(new Error('network')); };
+    script.src = WEBAPP_URL + '?' + jsonpQuery(params, cb);
+    script.onerror = function(){ cleanup(); reject(new Error('network')); };   // ORB block fires this too
     document.body.appendChild(script);
   });
+}
+function jsonpFetch(params, timeoutMs){
+  if(typeof fetch !== 'function') return Promise.reject(new Error('no fetch'));
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, timeoutMs||20000) : null;
+  var opts = { credentials: 'omit', redirect: 'follow' }; if(ctrl) opts.signal = ctrl.signal;
+  return fetch(WEBAPP_URL + '?' + jsonpQuery(params), opts)
+    .then(function(r){ if(timer) clearTimeout(timer); return r.text(); })
+    .then(function(txt){ return JSON.parse(txt); });
+}
+function jsonp(params, timeoutMs){
+  return jsonpScript(params, timeoutMs).catch(function(){ return jsonpFetch(params, timeoutMs); });
 }
 
 /* ---- boot loader (the full-screen splash before the first data lands) ---- */
