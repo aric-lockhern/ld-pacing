@@ -347,8 +347,12 @@ function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
 function sortFromPref(){ var p=lsGet('lk_sort','name'); return p==='spend'?{key:'mtd',dir:'desc'}:(p==='issue'?{key:'issue',dir:'desc'}:{key:'name',dir:'asc'}); }
 var DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbw3NZFjb0A3jN1OS3Kwu_1obkyy-8KU6lCAUXjawqFG66guzY3GU0hbC5A6RH3oQNLD/exec';
 var DEFAULT_SECRET     = 'lockhern-pacing';                        // must match the gateway
-var WEBAPP_URL = lsGet('lk_webapp', DEFAULT_WEBAPP_URL);
-var SECRET     = lsGet('lk_secret', DEFAULT_SECRET);
+// Read the per-browser override, but self-heal a bad saved value: trim it and,
+// if it isn't a clean http(s) URL (blank, whitespace, a stray leading space from
+// an old paste, etc.), fall back to the team default instead of silently showing
+// sample data. A valid custom URL is still honored.
+var WEBAPP_URL = (function(){ var u=String(lsGet('lk_webapp', DEFAULT_WEBAPP_URL)||'').trim(); return u.indexOf('http')===0 ? u : DEFAULT_WEBAPP_URL; })();
+var SECRET     = String(lsGet('lk_secret', DEFAULT_SECRET)||'').trim() || DEFAULT_SECRET;
 var ACTIVE_LABEL = 'active';
 
 /* ---- state ---- */
