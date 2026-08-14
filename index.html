@@ -409,9 +409,12 @@ function loadData(){
     state.feedUpdated = stamps.length ? stamps[stamps.length-1] : '';
     state.source='live'; render(); hideBoot();
     if(!state._slackFetched){ state._slackFetched=true; jsonp({action:'slackUsers'}).then(function(r){ if(r&&r.ok&&r.users){ state.slackUsers=r.users; render(); } }).catch(function(){}); }
-  }).catch(function(){
+  }).catch(function(err){
+    // The request reached us but FAILED (blocked by an extension, offline,
+    // gateway error/redeploy needed, bad secret). Show a real error — don't
+    // silently pretend everything's fine with sample data.
     state.accounts = SAMPLE; state.rawG=[]; state.rawM=[]; state.groups={}; state.dailyByClient={};
-    state.source='sample'; render(); hideBoot();
+    state.source='error'; state.loadError=String((err&&err.message)||err||''); render(); hideBoot();
   });
 }
 
@@ -1015,7 +1018,9 @@ function render(){
   html+=budgetReminderHTML();
 
   /* feed banner */
-  if(state.source==='sample'){
+  if(state.source==='error'){
+    html+='<div class="banner warn"><span>⚠ <b>Couldn’t reach the gateway</b> — showing sample data. This is almost always a <b>browser extension</b> (ad / privacy / script blocker) blocking <code>script.google.com</code>, since it works in Incognito. Try disabling extensions for this site (or open <code>chrome://extensions</code>), then Retry. If it still fails on every browser, the gateway may need redeploying.'+(state.loadError?(' <span class="foot-dot">·</span> <i>'+esc(state.loadError)+'</i>'):'')+'</span><button data-act="refresh">Retry</button></div>';
+  } else if(state.source==='sample'){
     html+='<div class="banner warn"><span>Not connected to the sheet yet. Set WEBAPP_URL at the top of this file and deploy the gateway (a new version) — then everyone sees live numbers. Showing sample data.</span><button data-act="refresh">Retry</button></div>';
   }
 
