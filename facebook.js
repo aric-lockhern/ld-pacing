@@ -265,7 +265,10 @@ function campEffBudget(camp, b){
 // generic pace for a "unit" = { mtd, effBudget, daily } (daily rows use .cost as spend)
 function unitPace(mtd, effBudget, daily){
   var c=ctx();
-  var forecast = c.isLive && c.elapsed>0 ? (mtd/c.elapsed)*c.dim : null;
+  // live: linear whole-month projection · PAST (completed) month: actual final
+  // spend (mtd is already month-scoped) · FUTURE: nothing yet.
+  var forecast = c.isLive ? (c.elapsed>0 ? (mtd/c.elapsed)*c.dim : null)
+               : (state.viewMonth<state.liveKey ? mtd : null);
   var pace = effBudget>0 && forecast!=null ? forecast/effBudget : null;
   var variance = forecast!=null ? forecast-effBudget : null;
   return { forecast:forecast, pace:pace, variance:variance, effBudget:effBudget, mtd:mtd };
@@ -385,19 +388,20 @@ function acctDerive(acc){
   // the per-campaign values (not a whole-account extrapolation), so a paused
   // campaign contributes only what it spent — no forward projection. For all-
   // active accounts this is identical to the old linear rollup.
-  var camps=acctVisibleCampaigns(acc), live=ctx().isLive;
+  var camps=acctVisibleCampaigns(acc), live=ctx().isLive, isPast=state.viewMonth<state.liveKey;
   var eff=0, mtd=0, wc=0, fl=0, rc=0, val=0, fcast=0, projSum=0, aEff=0, aMtd=0, mm={}, amm={}, drop=null;
   camps.forEach(function(c){
     var cd=campDerive(c);
     eff+=cd.effBudget; mtd+=cd.mtd; wc+=cd.wc; fl+=cd.fl; rc+=cd.rc; val+=cd.val;
-    if(live){ fcast += (cd.forecast!=null?cd.forecast:cd.mtd); projSum += (cd.proj?cd.proj.proj:cd.mtd); }
+    if(live||isPast){ fcast += (cd.forecast!=null?cd.forecast:cd.mtd); }
+    if(live){ projSum += (cd.proj?cd.proj.proj:cd.mtd); }
     c.daily.forEach(function(p){ (mm[p.date]||(mm[p.date]={date:p.date,cost:0})).cost+=p.cost; });
     if(fbIsActive(c)){ aEff+=cd.effBudget; aMtd+=cd.mtd; c.daily.forEach(function(p){ (amm[p.date]||(amm[p.date]={date:p.date,cost:0})).cost+=p.cost; }); }
     if(cd.drop && (!drop || (cd.drop.level==='critical'&&drop.level!=='critical'))) drop=cd.drop;
   });
   var daily=Object.keys(mm).map(function(k){return mm[k];}).sort(byDate);
   var activeDaily=Object.keys(amm).map(function(k){return amm[k];}).sort(byDate);
-  var forecast = live ? fcast : null;
+  var forecast = (live||isPast) ? fcast : null;
   var p={ forecast:forecast, effBudget:eff, mtd:mtd,
           pace:(eff>0&&forecast!=null)?forecast/eff:null,
           variance:(forecast!=null)?forecast-eff:null };
@@ -483,9 +487,10 @@ FB.render = function(baseHtml){
   t.leads = t.fl + t.rc;
   t.cpl = (t.leads>0 && t.mtd>0) ? t.mtd/t.leads : null;
   t.roas = t.val>0 && t.mtd>0 ? t.val/t.mtd : null;
-  t.pace = isLive&&t.budget>0 ? t.forecast/t.budget : null;
-  t.variance = isLive ? t.forecast-t.budget : null;
-  var cellL=function(v){ return isLive?v:'—'; };
+  var isPast=state.viewMonth<state.liveKey, showVals=isLive||isPast;
+  t.pace = showVals&&t.budget>0 ? t.forecast/t.budget : null;
+  t.variance = showVals ? t.forecast-t.budget : null;
+  var cellL=function(v){ return showVals?v:'—'; };
 
   html += '<div class="summary">'
     + stat('MTD spend', cellL(money(t.mtd)))
@@ -535,8 +540,8 @@ FB.render = function(baseHtml){
     + '<div class="c-num strong">'+cellL(money(t.mtd,true))+'</div>'
     + '<div class="c-num">'+cellL(money(t.forecast,true))+'</div>'
     + '<div class="c-budget total-budget" id="fb-tr-budget">'+money(t.budget,true)+'</div>'
-    + '<div class="c-pace" id="fb-tr-pace">'+(isLive?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>')+'</div>'
-    + '<div class="c-num '+(t.variance>0?'neg':'pos')+'" id="fb-tr-var">'+(isLive&&t.variance!=null?((t.variance>0?'+':'')+money(t.variance,true)):'—')+'</div>'
+    + '<div class="c-pace" id="fb-tr-pace">'+(showVals?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>')+'</div>'
+    + '<div class="c-num '+(t.variance>0?'neg':'pos')+'" id="fb-tr-var">'+(showVals&&t.variance!=null?((t.variance>0?'+':'')+money(t.variance,true)):'—')+'</div>'
     + '<div class="c-num" id="fb-tr-trend">'+fbTrendTot(t,isLive)+'</div>'
     + '<div class="c-num">'+cellL(intf(t.wc))+'</div>'
     + '<div class="c-num">'+cellL(intf(t.leads))+'</div>'
@@ -611,7 +616,8 @@ function fbSendSlack(){
 
 function stat(label,value){ return '<div class="stat"><div class="stat-label">'+label+'</div><div class="stat-value">'+value+'</div></div>'; }
 function fbSummaryPaceHTML(t,isLive){
-  return isLive
+  var showVals = isLive || state.viewMonth<state.liveKey;   // live OR completed month
+  return showVals
     ? '<div class="pace-row"><span class="pace-num t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span><span class="pace-var t-'+(t.variance>0?'over':'good')+'">'+(t.variance>0?'+':'')+money(t.variance,true)+' vs budget</span></div>'+meterHTML(t.pace,statusOf(t.pace))
     : '<div class="pace-plan">Set budgets for '+esc(monthLabel(state.viewMonth))+'</div>';
 }
@@ -622,15 +628,16 @@ function fbPatchTotals(){
   var accounts=(state.fbAccounts||[]).filter(function(a){ return acctVisibleCampaigns(a).length>0; });
   var t={mtd:0,forecast:0,budget:0,proj:0};
   accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); });
-  t.pace=isLive&&t.budget>0?t.forecast/t.budget:null;
-  t.variance=isLive?t.forecast-t.budget:null;
+  var showVals=isLive||state.viewMonth<state.liveKey;
+  t.pace=showVals&&t.budget>0?t.forecast/t.budget:null;
+  t.variance=showVals?t.forecast-t.budget:null;
   t.projPct=isLive&&t.budget>0?t.proj/t.budget:null; t.projGap=isLive&&t.budget>0?t.proj-t.budget:null;
   function byId(id){ return document.getElementById(id); }
   var sb=byId('fb-sum-budget'); if(sb) sb.textContent=money(t.budget);
   var sp=byId('fb-sum-pace'); if(sp) sp.innerHTML=fbSummaryPaceHTML(t,isLive);
   var tb=byId('fb-tr-budget'); if(tb) tb.textContent=money(t.budget,true);
-  var tp=byId('fb-tr-pace'); if(tp) tp.innerHTML=isLive?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>';
-  var tv=byId('fb-tr-var'); if(tv){ tv.className='c-num '+(t.variance>0?'neg':'pos'); tv.textContent=(isLive&&t.variance!=null)?((t.variance>0?'+':'')+money(t.variance,true)):'—'; }
+  var tp=byId('fb-tr-pace'); if(tp) tp.innerHTML=showVals?('<span class="pacepct t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span>'+meterHTML(t.pace,statusOf(t.pace))):'<span class="pace-na">—</span>';
+  var tv=byId('fb-tr-var'); if(tv){ tv.className='c-num '+(t.variance>0?'neg':'pos'); tv.textContent=(showVals&&t.variance!=null)?((t.variance>0?'+':'')+money(t.variance,true)):'—'; }
   var tt=byId('fb-tr-trend'); if(tt) tt.innerHTML=fbTrendTot(t,isLive);
 }
 function fbSaveText(){ return state.fbSave==='saving'?'Saving…':(state.fbSave==='saved'?'✓ Saved':'Shared with team'); }
@@ -701,7 +708,23 @@ function trendCellHTML(proj, burn){
   return '<div class="c-num cell-trend" title="'+esc(tip)+'"><span class="trendval t-'+st+'">'+money(proj.proj,true)+'</span>'
     + '<span class="trendnote t-'+st+(burn?' burn':'')+'">'+esc(note)+'</span></div>';
 }
+// Completed (past) month: the "Forecast" column shows the ACTUAL final spend.
+function fbTrendCellPast(d){
+  if(d.forecast==null) return '<div class="c-num cell-trend">—</div>';
+  var st=statusOf(d.pace);
+  var note = d.variance==null ? 'final'
+    : (st==='good' ? 'on budget'
+      : (d.variance>0 ? '+'+money(d.variance,true)+' over' : money(Math.abs(d.variance),true)+' under'));
+  return '<div class="c-num cell-trend" title="Actual final spend for '+esc(monthLabel(state.viewMonth))+'"><span class="trendval t-'+st+'">'+money(d.forecast,true)+'</span>'
+    + '<span class="trendnote t-'+st+'">'+esc(note)+'</span></div>';
+}
 function fbTrendTot(t,isLive){
+  var isPast=state.viewMonth<state.liveKey;
+  if(isPast){
+    var pctv = t.budget>0 ? t.forecast/t.budget : null, gap=t.budget>0?t.forecast-t.budget:null, stp=statusOf(pctv);
+    var np = pctv==null?'final':(stp==='good'?'on budget':(gap>0?'+'+money(gap,true)+' over':money(Math.abs(gap),true)+' under'));
+    return '<span class="trendval t-'+stp+'">'+money(t.forecast,true)+'</span><span class="trendnote t-'+stp+'">'+esc(np)+'</span>';
+  }
   if(!isLive) return '—';
   var pctv = t.budget>0 ? t.proj/t.budget : null, gap=t.budget>0?t.proj-t.budget:null, st=statusOf(pctv);
   var note = pctv==null?'—':(st==='good'?'on track':(gap>0?'+'+money(gap,true)+' over':money(Math.abs(gap),true)+' under'));
@@ -710,7 +733,8 @@ function fbTrendTot(t,isLive){
 
 /* ---- account rollup row ---- */
 function acctRowHTML(a,isLive){
-  var d=acctDerive(a), st=statusOf(d.pace), opn=!!state.fbOpen[a.account], cl=function(v){return isLive?v:'—';};
+  var isPast=state.viewMonth<state.liveKey, showVals=isLive||isPast;
+  var d=acctDerive(a), st=statusOf(d.pace), opn=!!state.fbOpen[a.account], cl=function(v){return showVals?v:'—';};
   var camps=acctVisibleCampaigns(a);
   var burnDot = fbAlertDot(d);
   var html='<div class="fbblock'+(opn?' open':'')+'" data-fbarow="'+esc(a.account)+'">'
@@ -721,9 +745,9 @@ function acctRowHTML(a,isLive){
     + '<div class="c-num strong fb-mtd">'+cl(money(d.mtd,true))+'</div>'
     + '<div class="c-num fb-forecast">'+cl(money(d.forecast,true))+'</div>'
     + '<div class="c-budget total-budget fb-abudget">'+money(d.effBudget,true)+'</div>'
-    + '<div class="c-pace fb-pace">'+(isLive?('<span class="pacepct t-'+st+'">'+pct(d.pace)+'</span>'+meterHTML(d.pace,st)):'<span class="pace-na">—</span>')+'</div>'
-    + '<div class="c-num fb-var '+(d.variance>0?'neg':'pos')+'">'+(isLive&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
-    + (isLive?trendCellHTML(d.proj,d.burn):'<div class="c-num cell-trend">—</div>')
+    + '<div class="c-pace fb-pace">'+(showVals?('<span class="pacepct t-'+st+'">'+pct(d.pace)+'</span>'+meterHTML(d.pace,st)):'<span class="pace-na">—</span>')+'</div>'
+    + '<div class="c-num fb-var '+(d.variance>0?'neg':'pos')+'">'+(showVals&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
+    + (isLive?trendCellHTML(d.proj,d.burn):(isPast?fbTrendCellPast(d):'<div class="c-num cell-trend">—</div>'))
     + '<div class="c-num">'+cl(intf(d.wc))+'</div>'
     + '<div class="c-num">'+cl(intf(d.leads))+'</div>'
     + '<div class="c-num">'+cl(d.cpl!=null?money(d.cpl):'—')+'</div>'
@@ -790,8 +814,9 @@ function campBudgetCell(camp,d,b,key){
 
 /* ---- campaign pacing row (level 2) ---- */
 function campRowHTML(a,camp,isLive){
+  var isPast=state.viewMonth<state.liveKey, showVals=isLive||isPast;
   var d=campDerive(camp), st=statusOf(d.pace), key=fbKey(camp.account,camp.campaign);
-  var opn=!!state.fbCampOpen[key], cl=function(v){return isLive?v:'—';};
+  var opn=!!state.fbCampOpen[key], cl=function(v){return showVals?v:'—';};
   var b=d.budget;
   var statusOn = String(camp.status||'').toUpperCase().indexOf('ACTIVE')>=0;
   var budgetCell = campBudgetCell(camp,d,b,key);
@@ -804,9 +829,9 @@ function campRowHTML(a,camp,isLive){
     + '<div class="c-num strong fb-mtd">'+cl(money(d.mtd,true))+'</div>'
     + '<div class="c-num fb-forecast">'+cl(money(d.forecast,true))+'</div>'
     + '<div class="c-budget fb-budgetcell" data-noexpand="1">'+budgetCell+'</div>'
-    + '<div class="c-pace fb-pace">'+(isLive?('<span class="pacepct t-'+st+'">'+pct(d.pace)+'</span>'+meterHTML(d.pace,st)):'<span class="pace-na">—</span>')+'</div>'
-    + '<div class="c-num fb-var '+(d.variance>0?'neg':'pos')+'">'+(isLive&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
-    + (isLive?trendCellHTML(d.proj,d.burn):'<div class="c-num cell-trend">—</div>')
+    + '<div class="c-pace fb-pace">'+(showVals?('<span class="pacepct t-'+st+'">'+pct(d.pace)+'</span>'+meterHTML(d.pace,st)):'<span class="pace-na">—</span>')+'</div>'
+    + '<div class="c-num fb-var '+(d.variance>0?'neg':'pos')+'">'+(showVals&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
+    + (isLive?trendCellHTML(d.proj,d.burn):(isPast?fbTrendCellPast(d):'<div class="c-num cell-trend">—</div>'))
     + '<div class="c-num">'+cl(intf(d.wc))+'</div>'
     + '<div class="c-num">'+cl(intf(d.leads))+'</div>'
     + '<div class="c-num">'+cl(d.cpl!=null?money(d.cpl):'—')+'</div>'
