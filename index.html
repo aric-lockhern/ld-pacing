@@ -840,7 +840,19 @@ function projection(a,d){
 }
 function trendCell(a,d,isLive,extraCls){
   var cls='c-num cell-trend'+(extraCls||'');
-  var p = isLive ? projection(a,d) : null;
+  if(!isLive){
+    // Completed (past) month: the "Forecast" column shows the ACTUAL final
+    // spend for the month — there is nothing left to project.
+    if(state.viewMonth<state.liveKey && d.forecast!=null){
+      var pst=statusOf(d.pace);
+      var pn = d.variance==null ? 'final'
+        : (pst==='good' ? 'on budget'
+          : (d.variance>0 ? '+'+money(d.variance,true)+' over' : money(Math.abs(d.variance),true)+' under'));
+      return '<div class="'+cls+'" title="Actual final spend for '+esc(monthLabel(state.viewMonth))+'"><span class="trendval t-'+pst+'">'+money(d.forecast,true)+'</span><span class="trendnote t-'+pst+'">'+esc(pn)+'</span></div>';
+    }
+    return '<div class="'+cls+'">—</div>';   // future / planning month
+  }
+  var p = projection(a,d);
   if(!p) return '<div class="'+cls+'">—</div>';
   var b = isLive ? burnInfo(a,d) : null;
   var st = b ? 'over' : statusOf(p.pct);
@@ -896,10 +908,11 @@ function totals(list){
     var d=derive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.conv+=d.conv; t.val+=d.val;
     var p=projection(a,d); t.proj += p ? p.proj : (d.forecast||0);
   });
-  t.pace = isLive&&t.budget>0 ? t.forecast/t.budget : null;
+  var showPace = state.viewMonth<=state.liveKey;   // live OR completed month
+  t.pace = showPace&&t.budget>0 ? t.forecast/t.budget : null;
   t.projPct = isLive&&t.budget>0 ? t.proj/t.budget : null;
   t.projGap = isLive&&t.budget>0 ? t.proj-t.budget : null;
-  t.variance = isLive ? t.forecast-t.budget : null;
+  t.variance = showPace ? t.forecast-t.budget : null;
   t.cpa = t.conv>0 ? t.mtd/t.conv : null;
   t.roas = t.val>0&&t.mtd>0 ? t.val/t.mtd : null;
   return t;
@@ -1050,7 +1063,8 @@ function render(){
     document.getElementById('app').innerHTML=html; return;
   }
   var c=ctx(), vis=visibleAccounts(), list=sortAccounts(vis.list), t=totals(vis.list), isLive=c.isLive;
-  var cellL=function(v){ return isLive?v:'—'; };
+  var isPast=state.viewMonth<state.liveKey;                 // completed month → show actuals
+  var cellL=function(v){ return (isLive||isPast)?v:'—'; };  // blank only FUTURE (planning) months
 
   html+=budgetReminderHTML();
 
@@ -1236,7 +1250,8 @@ function saveText(){ return state.save==='saving'?'Saving…':(state.save==='sav
 function updateSaveInd(){ var el=document.getElementById('saveind'); if(el){ el.className='saveind '+state.save; el.textContent=saveText(); } }
 
 function rowHTML(a,isLive){
-  var d=derive(a), st=statusOf(d.pace), b=d.budget, opn=!!state.open[a.client], cl=function(v){return isLive?v:'—';};
+  var isPast=state.viewMonth<state.liveKey, showVals=isLive||isPast;   // completed month shows actuals; only FUTURE blanks
+  var d=derive(a), st=statusOf(d.pace), b=d.budget, opn=!!state.open[a.client], cl=function(v){return showVals?v:'—';};
   var al=alertFor(a);
   var ty=accountType(a);
   var dc=accountDiscipline(a);
@@ -1258,8 +1273,8 @@ function rowHTML(a,isLive){
       + (a.hidden?'<span class="tag hiddentag">hidden</span>':'')+'</span></div>'
     + '<div class="c-num strong cell-mtd">'+cl(money(d.mtd,true))+'</div>'
     + '<div class="c-budget cell-budget" data-noexpand="1">'+budgetCell+'</div>'
-    + '<div class="c-pace cell-pace">'+(isLive?('<span class="pacepct t-'+st+'">'+pct(d.pace)+'</span>'+trendBadge(a,d)+meterHTML(d.pace,st)):'<span class="pace-na">—</span>')+'</div>'
-    + '<div class="c-num cell-var '+(d.variance>0?'neg':'pos')+'">'+(isLive&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
+    + '<div class="c-pace cell-pace">'+(showVals?('<span class="pacepct t-'+st+'">'+pct(d.pace)+'</span>'+(isLive?trendBadge(a,d):'')+meterHTML(d.pace,st)):'<span class="pace-na">—</span>')+'</div>'
+    + '<div class="c-num cell-var '+(d.variance>0?'neg':'pos')+'">'+(showVals&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
     + trendCell(a,d,isLive)
     + '<div class="c-num cell-conv">'+cl(intf(d.conv))+'</div>'
     + '<div class="c-num cell-cpa">'+cl(d.cpa==null?'—':money(d.cpa))+'</div>'
