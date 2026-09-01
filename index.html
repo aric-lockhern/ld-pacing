@@ -1298,9 +1298,10 @@ function rowHTML(a,isLive){
       + '<button class="mini" data-act="'+(a.hidden?'unhide':'hide')+'" data-client="'+esc(a.client)+'">'+(a.hidden?'Unhide':'Hide')+'</button>'
       + '</div></div>'
       + alertStripHTML(a,al)
-      + recentStripHTML(a,d)
+      + (isPast ? monthSummaryStripHTML(a,d) : recentStripHTML(a,d))
       + '<div class="synced-note">🔒 Sourced from the platform feed — read-only.</div>'
-      + '<div class="platforms">'+readout('Google Ads',a.g,a.hasG,a.ids.g,ty==='ecomm')+readout('Microsoft Ads',a.m,a.hasM,a.ids.m,ty==='ecomm')+'</div>'
+      + (isPast ? monthReadoutHTML(a,d,ty==='ecomm')
+                : '<div class="platforms">'+readout('Google Ads',a.g,a.hasG,a.ids.g,ty==='ecomm')+readout('Microsoft Ads',a.m,a.hasM,a.ids.m,ty==='ecomm')+'</div>')
       + '<div class="budgetbox"><div class="bb-title">'+esc(monthLabel(state.viewMonth))+' budget</div><div class="bb-controls">'
       + '<div class="segment"><button class="'+(b.mode!=='lastMonth'?'on':'')+'" data-act="mode-manual" data-client="'+esc(a.client)+'">Set manually</button>'
       + '<button class="'+(b.mode==='lastMonth'?'on':'')+'" data-act="mode-lm" data-client="'+esc(a.client)+'">Use last month</button></div>'
@@ -1316,6 +1317,31 @@ function readout(title,plat,present,id,showRev){
     + '<div class="ro-grid">'+s('MTD spend',present?money(p.spend):'—')+s('Conversions',present?intf(p.conv):'—')
     + (showRev?s('Revenue',present&&p.val>0?money(p.val):'—'):s('CPA',present&&p.conv>0?money(p.spend/p.conv):'—'))
     + s('Last mo. spend',present?money(p.last):'—')+'</div></div>';
+}
+/* Completed-month readout. History is stored combined (the daily feed isn't
+   split by platform), so a past month shows one account-total box instead of
+   the live per-platform Google/Microsoft breakdown. */
+function monthReadoutHTML(a,d,showRev){
+  function s(l,v){ return '<div class="src"><span class="src-label">'+l+'</span><span class="src-value">'+v+'</span></div>'; }
+  return '<div class="platforms"><div class="readout"><div class="ro-head"><span>'+esc(monthLabel(state.viewMonth))+' actuals</span><span class="ro-id">Google + Microsoft combined</span></div>'
+    + '<div class="ro-grid">'+s('Spend',money(d.mtd))+s('Conversions',intf(d.conv))
+    + (showRev?s('Revenue',d.val>0?money(d.val):'—')+s('ROAS',xfmt(d.roas)):s('CPA',d.cpa==null?'—':money(d.cpa)))
+    + '</div><div class="ro-note">Per-platform split isn’t kept in history — these are the account totals for the month.</div></div></div>';
+}
+/* Completed-month summary strip — the "recent pace / runway" story only makes
+   sense mid-month, so a past month shows what actually happened instead. */
+function monthSummaryStripHTML(a,d){
+  var ym=state.viewMonth, dim=daysInMonthOf(ym);
+  var daily=accountDaily(a.client).filter(function(p){ return String(p.date).slice(0,7)===ym; });
+  var total=0, active=0, best=0;
+  daily.forEach(function(p){ total+=(p.spend||0); if(p.spend>0) active++; if((p.spend||0)>best) best=p.spend; });
+  var over = d.variance!=null && d.variance>0;
+  return '<div class="recentstrip">'
+    + '<div class="rp"><span class="rp-l">Spent</span><span class="rp-v">'+money(d.mtd)+'</span><span class="rp-r">of '+money(d.effBudget)+' budget</span></div>'
+    + '<div class="rp"><span class="rp-l">Final vs budget</span><span class="rp-v t-'+(over?'over':'good')+'">'+(d.variance==null?'—':((d.variance>0?'+':'')+money(d.variance)))+'</span><span class="rp-r">'+(d.pace!=null?(pct(d.pace)+' of budget'):'')+'</span></div>'
+    + '<div class="rp"><span class="rp-l">Avg / day</span><span class="rp-v">'+money(dim>0?total/dim:0)+'</span><span class="rp-r">over '+dim+' days</span></div>'
+    + (active?('<div class="rp"><span class="rp-l">Active days</span><span class="rp-v">'+active+'</span><span class="rp-r">of '+dim+' · busiest '+money(best)+'</span></div>'):'')
+    + '</div>';
 }
 
 /* ---- daily detail (charts + breakdown) ---- */
@@ -1703,6 +1729,7 @@ function resolveBudget(client, monthKey){
 }
 function makeXTicksIdx(rows){ var n=rows.length,k=Math.min(6,n),t=[]; for(var i=0;i<k;i++){ var idx=Math.round(i*(n-1)/((k-1)||1)); t.push({x:idx,label:labelDate(rows[idx].date)}); } return t; }
 function detailHTML(a,d){
+  var isPast = state.viewMonth < state.liveKey;
   var days=state.detailDays||30;
   // Calendar-fill: the feed omits $0-spend days, so a drop to $0 (or an account
   // that stopped spending) is otherwise invisible. Build a date->row map and walk
@@ -1711,8 +1738,18 @@ function detailHTML(a,d){
   var rich={}, dmin='';
   accountDaily(a.client).forEach(function(p){ var k=String(p.date); if(k<todayIso()){ rich[k]=p; if(!dmin||k<dmin) dmin=k; } });
   if(!dmin) return '';
-  var endRef = (state.searchMaxDate && state.searchMaxDate>=dmin) ? state.searchMaxDate : dmin;
-  var wStart = isoAdd(endRef, -(days-1)); if(wStart<dmin) wStart=dmin;
+  var endRef, wStart;
+  if(isPast){
+    // Viewing a COMPLETED month → scope the whole panel to that calendar month
+    // (not a rolling window ending yesterday), so the charts and table show the
+    // month you selected up top. Missing days render $0; the month is over.
+    endRef = state.viewMonth+'-'+('0'+daysInMonthOf(state.viewMonth)).slice(-2);
+    wStart = state.viewMonth+'-01'; if(wStart<dmin) wStart=dmin;
+    if(wStart>endRef) return '<div class="detail"><div class="chnote" style="padding:16px">No daily data for '+esc(monthLabel(state.viewMonth))+'.</div></div>';
+  } else {
+    endRef = (state.searchMaxDate && state.searchMaxDate>=dmin) ? state.searchMaxDate : dmin;
+    wStart = isoAdd(endRef, -(days-1)); if(wStart<dmin) wStart=dmin;
+  }
 
   // Expected curve + each day's target follow the DAY-OF-WEEK weighted shape
   // (weekend days get a low target, weekdays a high one) rather than a flat
@@ -1772,7 +1809,9 @@ function detailHTML(a,d){
           + '<div class="chartcard"><div class="ch-title">ROAS (daily)</div>'+roasChart+'</div>';
   }
 
-  var rangebar='<div class="rangebar"><span class="rl">Last</span><div class="segment sm">'
+  var rangebar = isPast
+    ? '<div class="rangebar"><span class="rl">'+esc(monthLabel(state.viewMonth))+'</span><span class="rangecount">'+n+' days · '+labelDate(rows[0].date)+' – '+labelDate(last.date)+'</span></div>'
+    : '<div class="rangebar"><span class="rl">Last</span><div class="segment sm">'
     + [30,60,90].map(function(dd){return '<button class="'+(days===dd?'on':'')+'" data-act="range" data-days="'+dd+'">'+dd+'d</button>';}).join('')
     + '</div><span class="rangecount">'+n+' days · '+labelDate(rows[0].date)+' – '+labelDate(last.date)+'</span></div>';
 
