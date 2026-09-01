@@ -771,14 +771,32 @@ function remainingDowLabel(){
   return out.length ? (out.length+' remaining: '+out.join(', ')) : '';
 }
 
+function monthAgg(client, ym){
+  var o={spend:0,conv:0,rev:0};
+  (state.dailyByClient[client]||[]).forEach(function(p){ if(String(p.date).slice(0,7)===ym){ o.spend+=(p.spend||0); o.conv+=(p.conv||0); o.rev+=(p.rev||0); } });
+  return o;
+}
 function derive(acc){
   var c=ctx();
-  var mtd=acc.g.spend+acc.m.spend, lastMoTotal=acc.g.last+acc.m.last, conv=acc.g.conv+acc.m.conv, val=acc.g.val+acc.m.val;
-  var forecastLinear = c.isLive && c.elapsed>0 ? (mtd/c.elapsed)*c.dim : null;   // flat whole-month average (secondary)
-  var dp = c.isLive ? dowProject(acc.client, mtd) : null;                        // day-of-week weighted (primary when confident)
-  var forecast = dp ? dp.proj : forecastLinear;
-  var b=getBudget(acc.client);
+  var lastMoTotal=acc.g.last+acc.m.last, b=getBudget(acc.client);
   var effBudget = b.mode==='lastMonth' ? lastMoTotal : b.amount;
+  var mtd, conv, val, forecast, forecastLinear=null, dp=null;
+  if(c.isLive){
+    // live month: the feed's MTD is the authoritative, most-current spend
+    mtd=acc.g.spend+acc.m.spend; conv=acc.g.conv+acc.m.conv; val=acc.g.val+acc.m.val;
+    forecastLinear = c.elapsed>0 ? (mtd/c.elapsed)*c.dim : null;   // flat whole-month average (secondary)
+    dp = dowProject(acc.client, mtd);                              // day-of-week weighted (primary when confident)
+    forecast = dp ? dp.proj : forecastLinear;
+  } else if(state.viewMonth < state.liveKey){
+    // PAST month: the feed only carries the current month, so read the actual
+    // spend / conversions / revenue for that month from the daily history.
+    var agg=monthAgg(acc.client, state.viewMonth);
+    mtd=agg.spend; conv=agg.conv; val=agg.rev;
+    forecast=mtd;                                                  // month is complete → "forecast" = what was actually spent
+  } else {
+    // FUTURE (planning) month: nothing spent yet
+    mtd=0; conv=0; val=0; forecast=null;
+  }
   var pace = effBudget>0 && forecast!=null ? forecast/effBudget : null;
   var variance = forecast!=null ? forecast-effBudget : null;
   var cpa = conv>0 ? mtd/conv : null;
@@ -950,7 +968,7 @@ function topbarHTML(){
   var settings='<div class="tabs"><button class="tab '+(inSettings?'on':'')+'" data-act="tab-settings">Settings</button></div>';
   var monthnav = inSettings ? '' :
     ('<div class="monthnav"><button class="mn-arrow" data-act="prev">‹</button>'
-      + '<div class="mn-label">'+esc(monthLabel(state.viewMonth))+'<span class="mn-tag '+(isLive?'live':'plan')+'">'+(isLive?'Live':'Planning')+'</span></div>'
+      + '<div class="mn-label">'+esc(monthLabel(state.viewMonth))+'<span class="mn-tag '+(isLive?'live':'plan')+'">'+(isLive?'Live':(state.viewMonth<state.liveKey?'Actuals':'Planning'))+'</span></div>'
       + '<button class="mn-arrow" data-act="next">›</button>'
       + (isLive?'':'<button class="mn-today" data-act="today">Today</button>')+'</div>');
   var brand='<div class="brand"><span class="mark">Lockhern</span><span class="sep">/</span><span class="prod">Account Pacing</span>'+sourceChip()+'</div>';
@@ -1048,14 +1066,16 @@ function render(){
       + stat('MTD spend', cellL(money(t.mtd)))
       + stat('Forecast', cellL(money(t.forecast)))
       + stat('Budget', money(t.budget))
-      + '<div class="stat stat-pace"><div class="stat-label">Portfolio pace</div>'
-      + (isLive
+      + '<div class="stat stat-pace"><div class="stat-label">'+(state.viewMonth<state.liveKey?'Final vs budget':'Portfolio pace')+'</div>'
+      + (state.viewMonth<=state.liveKey
           ? '<div class="pace-row"><span class="pace-num t-'+statusOf(t.pace)+'">'+pct(t.pace)+'</span><span class="pace-var t-'+(t.variance>0?'over':'good')+'">'+(t.variance>0?'+':'')+money(t.variance,true)+' vs budget</span></div>'+meterHTML(t.pace,statusOf(t.pace))
           : '<div class="pace-plan">Set budgets for '+esc(monthLabel(state.viewMonth))+'</div>')
       + '</div></div>';
 
-  if(!isLive){
+  if(state.viewMonth>state.liveKey){
     html+='<div class="banner plan"><span>Planning <b>'+esc(monthLabel(state.viewMonth))+'</b>. Edit budgets now; live spend and pacing appear once the month is active.</span><button data-act="copyprev">Copy '+esc(monthLabel(shiftKey(state.viewMonth,-1)))+' budgets</button></div>';
+  } else if(state.viewMonth<state.liveKey){
+    html+='<div class="banner plan"><span>📅 Viewing <b>'+esc(monthLabel(state.viewMonth))+'</b> — actual spend and the budgets that were set for that month. Read-only history.</span></div>';
   } else {
     var inh=inheritedInfo(list);
     if(inh.any && !monthReminderDismissed()){

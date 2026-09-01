@@ -85,7 +85,7 @@ var RATE_DAYS_G     = 3;   // recent-rate window for the "trending to" line
    delivery are dropped — so unmanaged/dead data never reaches the browser. */
 var FB_SPREADSHEET_ID = '1ealb9ssXKqspG204VubWJvkbd77A8_jVfege3uUNS20';
 var FB_TAB            = 'FB - Daily';
-var FB_LOOKBACK_DAYS  = 95;                 // trim payload to a rolling window
+var FB_LOOKBACK_DAYS  = 130;                // rolling window served to the tool (~4 months, so the last 3 full months are always visible)
 var FB_MAX_ROWS       = 120000;             // safety cap on rows read (newest at the bottom)
 var FB_CACHE_SECS     = 300;                // cache the heavy FB read for 5 min
 var FB_BUDGET_TAB     = 'Facebook_Budgets'; // stored in the MAIN (private) sheet
