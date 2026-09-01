@@ -884,10 +884,14 @@ function fbChartsHTML(camp,d){
   var yest=isoAdd(todayIso(),-1);
   // Range ends at yesterday for the live month (so every elapsed day shows,
   // data or not), or the month's last day when browsing a past month.
+  var isPast=state.viewMonth<state.liveKey;
   var end=(state.viewMonth===state.liveKey) ? (yest<monthEnd?yest:monthEnd) : monthEnd;
-  if(end<first) return '<div class="fbmeta">No daily history yet.</div>';
-  var start=isoAdd(end,-(days-1));
+  if(end<first) return '<div class="fbmeta">No daily history for '+esc(monthLabel(state.viewMonth))+'.</div>';
+  // Past month → scope the window to that calendar month; live month → rolling
+  // last-N-days window ending yesterday.
+  var start = isPast ? (state.viewMonth+'-01') : isoAdd(end,-(days-1));
   if(start<first) start=first;                                // don't pad with dead days before the campaign existed
+  if(start>end) return '<div class="fbmeta">No daily history for '+esc(monthLabel(state.viewMonth))+'.</div>';
   var dim=daysInMonthOf(state.viewMonth);
   var target = d.effBudget>0 ? d.effBudget/dim : 0;
   var cum=0, cexp=0, rows=[], iso=start, i=0;
@@ -927,7 +931,9 @@ function fbChartsHTML(camp,d){
   }
   charts+='</div>';
 
-  var rangebar='<div class="rangebar"><span class="rl">Last</span><div class="segment sm">'
+  var rangebar = isPast
+    ? '<div class="rangebar"><span class="rl">'+esc(monthLabel(state.viewMonth))+'</span><span class="rangecount">'+n+' days · '+labelDate(rows[0].date)+' – '+labelDate(last.date)+'</span></div>'
+    : '<div class="rangebar"><span class="rl">Last</span><div class="segment sm">'
     + [30,60,90].map(function(dd){return '<button class="'+(days===dd?'on':'')+'" data-act="fb-range" data-days="'+dd+'">'+dd+'d</button>';}).join('')
     + '</div><span class="rangecount">'+n+' days · '+labelDate(rows[0].date)+' – '+labelDate(last.date)+'</span></div>';
 
