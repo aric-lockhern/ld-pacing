@@ -1,0 +1,69 @@
+name: Deploy Apps Script gateway
+
+# Pushes apps-script/Code.gs to the Google Apps Script project and redeploys the
+# existing web-app deployment IN PLACE (same /exec URL) on every push to main
+# that touches apps-script/**. This replaces the manual copy-paste-into-editor +
+# Manage deployments → New version dance.
+#
+# One-time setup (see apps-script/DEPLOY.md):
+#   • enable the Apps Script API for the Google account
+#   • add repo secret CLASPRC_JSON  = contents of your ~/.clasprc.json (clasp login)
+#   • set apps-script/.clasp.json scriptId, and commit the real appsscript.json (clasp pull)
+#   • (optional) repo variable APPS_SCRIPT_DEPLOYMENT_ID to override the default below
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps-script/**'
+  workflow_dispatch: {}
+
+concurrency:
+  group: appsscript-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install clasp
+        run: npm install -g @google/clasp@2.4.2
+
+      - name: Write clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "::error::CLASPRC_JSON secret is not set — add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+
+      - name: Guard — real manifest must be committed
+        run: |
+          if [ ! -f apps-script/appsscript.json ]; then
+            echo "::error::apps-script/appsscript.json is missing. Run 'clasp pull' locally to fetch the LIVE manifest (so the web-app access settings match) and commit it before enabling CI deploys."
+            exit 1
+          fi
+          if grep -q 'PASTE_YOUR_SCRIPT_ID_HERE' apps-script/.clasp.json; then
+            echo "::error::apps-script/.clasp.json still has the placeholder scriptId. Set it to your real Script ID (Apps Script → Project Settings → Script ID)."
+            exit 1
+          fi
+
+      - name: Push code to Apps Script
+        working-directory: apps-script
+        run: clasp push -f
+
+      - name: Redeploy the web app (keeps the same /exec URL)
+        working-directory: apps-script
+        env:
+          # Deployment ID = the token in your /exec URL. Override with a repo
+          # variable APPS_SCRIPT_DEPLOYMENT_ID if it ever changes.
+          DEPLOYMENT_ID: ${{ vars.APPS_SCRIPT_DEPLOYMENT_ID || 'AKfycbw3NZFjb0A3jN1OS3Kwu_1obkyy-8KU6lCAUXjawqFG66guzY3GU0hbC5A6RH3oQNLD' }}
+        run: clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "CI ${GITHUB_SHA::7}"

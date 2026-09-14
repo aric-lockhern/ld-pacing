@@ -7,3 +7,8 @@ Thumbs.db
 
 # Netlify local dev
 .netlify/
+
+# clasp credentials — NEVER commit these (they log in as your Google account)
+.clasprc.json
+apps-script/.clasprc.json
+node_modules/
