@@ -91,7 +91,7 @@ var FB_CACHE_SECS     = 300;                // cache the heavy FB read for 5 min
 var FB_BUDGET_TAB     = 'Facebook_Budgets'; // stored in the MAIN (private) sheet
 var FB_BUDGET_HEADER  = ['Account', 'Campaign', 'Month', 'Mode', 'Amount', 'Updated'];
 var FB_ACCTS_TAB      = 'Facebook_Accounts'; // tool-managed active flag + display rename, keyed by account (MAIN sheet)
-var FB_ACCTS_HEADER   = ['Account', 'Active', 'Name', 'Updated'];
+var FB_ACCTS_HEADER   = ['Account', 'Active', 'Name', 'Updated', 'Leads'];
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
@@ -127,6 +127,8 @@ function doGet(e) {
       out = setFbActive(p);
     } else if (p.action === 'setFbRename') {
       out = setFbRename(p);
+    } else if (p.action === 'setFbLeads') {
+      out = setFbLeads(p);
     } else if (p.action === 'setDiscipline') {
       out = setDiscipline(p);
     } else if (p.action === 'changelog') {
@@ -672,6 +674,7 @@ function readFbRows() {
       iWC = c('Website purchases', 'Website conversions'), iFL = c('On Facebook Leads'),
       iVal = c('Website purchases conversion value', 'Website conversions value'),
       iReg = c('Website registrations completed'),   // 2nd lead source; summed with On Facebook Leads
+      iCT = c('Website Contacts', 'Website contacts'),  // optional per-client lead source (e.g. Cedar Group)
       iActive = c('Active'),
       // Optional budget-designation columns (add any of these to the sheet):
       iLife = c('Lifetime budget'), iBType = c('Budget type'), iBLevel = c('Budget level'),
@@ -732,7 +735,8 @@ function readFbRows() {
       st: st,
       cost: numv(r[iCost]), imp: numv(r[iImp]), clk: numv(r[iClk]),
       wc: numv(r[iWC]), fl: numv(r[iFL]), val: numv(r[iVal]),
-      rc: iReg < 0 ? 0 : numv(r[iReg])                 // website registrations completed
+      rc: iReg < 0 ? 0 : numv(r[iReg]),                // website registrations completed
+      ct: iCT  < 0 ? 0 : numv(r[iCT])                  // website contacts (optional lead source)
     };
     // Optional fields: only include when non-empty, to keep the payload small.
     var tg = iTags < 0 ? '' : String(r[iTags] || '').trim(); if (tg) o.tg = tg;
@@ -757,7 +761,7 @@ function readFbRows() {
   // manage, while only active accounts ship their data above.
   var accounts = Object.keys(seen).map(function (acct) {
     var m = meta[acct] || {};
-    return { account: acct, active: acctActive(acct), name: m.name || '' };
+    return { account: acct, active: acctActive(acct), name: m.name || '', leads: m.leads || '' };
   }).sort(function (x, y) {
     var xn = (x.name || x.account).toLowerCase(), yn = (y.name || y.account).toLowerCase();
     return xn < yn ? -1 : (xn > yn ? 1 : 0);
@@ -803,12 +807,13 @@ function readFbAccountsMeta_() {
     var a = String(r.Active || '').trim().toLowerCase();
     var active = (a === 'yes' || a === 'y' || a === 'true' || a === '1') ? true
                : ((a === 'no' || a === 'n' || a === 'false' || a === '0') ? false : null);
-    map[acct] = { active: active, name: String(r.Name || '').trim() };
+    map[acct] = { active: active, name: String(r.Name || '').trim(), leads: String(r.Leads || '').trim() };
   });
   return map;
 }
-// Upsert one account's row. Passing null for active or name leaves that field as-is.
-function upsertFbAcct_(account, active, name) {
+// Upsert one account's row. Passing null for active / name / leads leaves that
+// field as-is. Columns: Account · Active · Name · Updated · Leads.
+function upsertFbAcct_(account, active, name, leads) {
   var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   var sheet = ss.getSheetByName(FB_ACCTS_TAB) || ss.insertSheet(FB_ACCTS_TAB);
   ensureHeader(sheet, FB_ACCTS_HEADER);
@@ -816,10 +821,11 @@ function upsertFbAcct_(account, active, name) {
   for (var i = 1; i < values.length; i++) {
     if (String(values[i][0]).trim() === account) { target = i + 1; break; }
   }
-  var existing = target > 0 ? values[target - 1] : [account, '', '', ''];
+  var existing = target > 0 ? values[target - 1] : [account, '', '', '', ''];
   var act = (active == null) ? String(existing[1] || '') : (active ? 'yes' : 'no');
   var nm  = (name   == null) ? String(existing[2] || '') : name;
-  var row = [account, act, nm, new Date().toISOString()];
+  var ld  = (leads  == null) ? String(existing[4] || '') : leads;   // Updated is col 4 (index 3)
+  var row = [account, act, nm, new Date().toISOString(), ld];
   if (target === -1) { sheet.appendRow(row); } else { sheet.getRange(target, 1, 1, row.length).setValues([row]); }
 }
 function setFbActive(p) {
@@ -840,6 +846,21 @@ function setFbRename(p) {
   upsertFbAcct_(account, null, name);
   fbCacheClear_(CacheService.getScriptCache());          // account roster (incl. display name) is cached with the rows
   logChange_(p.by, 'Social', 'Account rename', account, name ? ('→ ' + name) : '(cleared)');
+  return { ok: true };
+}
+// Which conversion column(s) count as "Leads" for one account (drives Leads + CPL
+// in the tool). Comma-separated keys from FB_LEAD_KEYS; empty = tool default.
+var FB_LEAD_KEYS = ['fl', 'rc', 'ct', 'wc'];
+function setFbLeads(p) {
+  requireSecret(p);
+  var account = String(p.account || '').trim();
+  if (!account) throw new Error('missing account');
+  var keys = String(p.leads || '').split(',').map(function (s) { return s.trim(); })
+             .filter(function (k) { return FB_LEAD_KEYS.indexOf(k) >= 0; });
+  var leads = keys.join(',');
+  upsertFbAcct_(account, null, null, leads);
+  fbCacheClear_(CacheService.getScriptCache());          // roster (incl. leads config) is cached with the rows
+  logChange_(p.by, 'Social', 'Lead sources', account, leads || '(default)');
   return { ok: true };
 }
 

@@ -76,8 +76,14 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
   + '.mac-sub{font-size:12.5px;color:var(--muted);margin:2px 0 10px;line-height:1.45;}'
   + '.mac-count{font-size:12px;color:var(--faint);margin-bottom:8px;display:flex;align-items:center;gap:10px;}'
   + '.mac-list{max-height:52vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;}'
-  + '.mac-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line2);}'
+  + '.mac-row{display:flex;flex-direction:column;align-items:stretch;gap:7px;padding:9px 10px;border-bottom:1px solid var(--line2);}'
   + '.mac-row:last-child{border-bottom:none;}'
+  + '.mac-main{display:flex;align-items:center;gap:10px;}'
+  + '.mac-leads{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:44px;}'
+  + '.mac-leads-l{font-size:10.5px;color:var(--faint);font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-right:2px;}'
+  + '.leadchip{font-size:11px;font-weight:600;border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:999px;padding:3px 10px;cursor:pointer;line-height:1.3;}'
+  + '.leadchip:hover{border-color:var(--accent);}'
+  + '.leadchip.on{border-color:var(--accent);background:var(--accent);color:#fff;}'
   + '.mac-tog{position:relative;display:inline-block;width:34px;height:20px;flex:0 0 auto;cursor:pointer;}'
   + '.mac-tog input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;}'
   + '.mac-slider{position:absolute;inset:0;background:var(--line2);border-radius:999px;transition:background .15s;}'
@@ -102,6 +108,34 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
 /* ---- key helpers ---- */
 function fbKey(account, campaign){ return account+'||'+campaign; }
 function byDate(a,b){ return a.date<b.date?-1:(a.date>b.date?1:0); }
+
+/* ---- Lead / conversion sources (configurable per account) ----
+   Each account picks which column(s) count as its "Leads" metric (and drive
+   CPL). Default = On Facebook Leads + Website registrations. A client like
+   Cedar Group can switch to a different column (e.g. Website Contacts). The
+   keys map straight to fields on each daily row / month aggregate. Stored
+   team-wide in the Facebook_Accounts tab (comma-separated). ---- */
+var FB_LEAD_SOURCES=[
+  { key:'fl', label:'FB Leads',      full:'On Facebook Leads' },
+  { key:'rc', label:'Registrations', full:'Website registrations completed' },
+  { key:'ct', label:'Web Contacts',  full:'Website Contacts' },
+  { key:'wc', label:'Purchases',     full:'Website purchases' }
+];
+var FB_LEAD_DEFAULT=['fl','rc'];
+function fbLeadSources(acct){
+  var raw = state.fbAcctLeads && state.fbAcctLeads[acct];
+  return (raw && raw.length) ? raw : FB_LEAD_DEFAULT;   // empty/unset → default
+}
+function fbLeadValue(view, acct){
+  var keys=fbLeadSources(acct), s=0;
+  keys.forEach(function(k){ s+=(view[k]||0); });
+  return s;
+}
+function fbLeadLabel(acct){
+  var keys=fbLeadSources(acct);
+  var names=FB_LEAD_SOURCES.filter(function(s){ return keys.indexOf(s.key)>=0; }).map(function(s){ return s.full; });
+  return 'Leads = '+(names.length?names.join(' + '):'(none selected)');
+}
 
 /* ============================================================
    LOAD
@@ -152,9 +186,9 @@ FB.rebuild = function(){
     if(r.bl) o.budgetLevel=String(r.bl).toLowerCase();          // campaign | ad set (from sheet)
     if(r.bs) o.budgetStart=r.bs; if(r.be) o.budgetEnd=r.be;     // lifetime flight dates
     if(r.st) o.status=r.st;                                      // latest status wins
-    var dm = o.dayMap[date] || (o.dayMap[date]={ date:date, cost:0, imp:0, clk:0, wc:0, fl:0, rc:0, val:0 });
+    var dm = o.dayMap[date] || (o.dayMap[date]={ date:date, cost:0, imp:0, clk:0, wc:0, fl:0, rc:0, ct:0, val:0 });
     dm.cost+=toNum(r.cost); dm.imp+=toNum(r.imp); dm.clk+=toNum(r.clk);
-    dm.wc+=toNum(r.wc); dm.fl+=toNum(r.fl); dm.rc+=toNum(r.rc); dm.val+=toNum(r.val);
+    dm.wc+=toNum(r.wc); dm.fl+=toNum(r.fl); dm.rc+=toNum(r.rc); dm.ct+=toNum(r.ct); dm.val+=toNum(r.val);
   });
 
   state.fbCampaignsBy = {};                        // account -> [campaign,...]
@@ -170,8 +204,8 @@ FB.rebuild = function(){
     // merged account daily series (sum campaigns by date)
     var mm={};
     list.forEach(function(c){ c.daily.forEach(function(p){
-      var d=mm[p.date]||(mm[p.date]={date:p.date,cost:0,imp:0,clk:0,wc:0,fl:0,rc:0,val:0});
-      d.cost+=p.cost; d.imp+=p.imp; d.clk+=p.clk; d.wc+=p.wc; d.fl+=p.fl; d.rc+=p.rc; d.val+=p.val;
+      var d=mm[p.date]||(mm[p.date]={date:p.date,cost:0,imp:0,clk:0,wc:0,fl:0,rc:0,ct:0,val:0});
+      d.cost+=p.cost; d.imp+=p.imp; d.clk+=p.clk; d.wc+=p.wc; d.fl+=p.fl; d.rc+=p.rc; d.ct+=(p.ct||0); d.val+=p.val;
     }); });
     var daily=Object.keys(mm).map(function(k){return mm[k];}).sort(byDate);
     return { account:acct, campaigns:list, daily:daily };
@@ -187,6 +221,12 @@ FB.rebuild = function(){
   // display-name map for in-tool account renames (raw account name stays the key)
   state.fbAcctName = {};
   (state.fbAcctList||[]).forEach(function(a){ if(a && a.name) state.fbAcctName[a.account]=a.name; });
+  // per-account lead-source selection (comma-separated keys from the gateway)
+  state.fbAcctLeads = {};
+  (state.fbAcctList||[]).forEach(function(a){
+    if(a && a.leads){ var arr=String(a.leads).split(',').map(function(s){return s.trim();}).filter(Boolean);
+      if(arr.length) state.fbAcctLeads[a.account]=arr; }
+  });
 };
 function fbDisplayName(acct){ return (state.fbAcctName && state.fbAcctName[acct]) || acct; }
 
@@ -194,8 +234,8 @@ function fbDisplayName(acct){ return (state.fbAcctName && state.fbAcctName[acct]
    AGGREGATION + PACING MATH (shared by campaign & account)
    ============================================================ */
 function aggMonth(daily, ym){
-  var o={cost:0,wc:0,fl:0,rc:0,val:0,imp:0,clk:0};
-  daily.forEach(function(p){ if(String(p.date).slice(0,7)===ym){ o.cost+=p.cost;o.wc+=p.wc;o.fl+=p.fl;o.rc+=(p.rc||0);o.val+=p.val;o.imp+=p.imp;o.clk+=p.clk; } });
+  var o={cost:0,wc:0,fl:0,rc:0,ct:0,val:0,imp:0,clk:0};
+  daily.forEach(function(p){ if(String(p.date).slice(0,7)===ym){ o.cost+=p.cost;o.wc+=p.wc;o.fl+=p.fl;o.rc+=(p.rc||0);o.ct+=(p.ct||0);o.val+=p.val;o.imp+=p.imp;o.clk+=p.clk; } });
   return o;
 }
 
@@ -347,8 +387,8 @@ function campDerive(camp){
   var view=aggMonth(camp.daily, state.viewMonth);
   var b=campGetBudget(camp), eff=campEffBudget(camp,b);
   var p=unitPace(view.cost, eff, camp.daily);
-  p.wc=view.wc; p.fl=view.fl; p.rc=view.rc; p.val=view.val;
-  p.leads = view.fl + view.rc;                                   // On Facebook Leads + website registrations
+  p.wc=view.wc; p.fl=view.fl; p.rc=view.rc; p.ct=view.ct; p.val=view.val;
+  p.leads = fbLeadValue(view, camp.account);                    // configurable per account (default FB Leads + registrations)
   p.cpl = (p.leads>0 && view.cost>0) ? view.cost/p.leads : null; // cost per lead
   p.roas = view.val>0 && view.cost>0 ? view.val/view.cost : null;
   p.budget=b; p.proj=unitProjection(camp.daily, eff); p.burn=unitBurn(view.cost, eff, camp.daily);
@@ -389,10 +429,10 @@ function acctDerive(acc){
   // campaign contributes only what it spent — no forward projection. For all-
   // active accounts this is identical to the old linear rollup.
   var camps=acctVisibleCampaigns(acc), live=ctx().isLive, isPast=state.viewMonth<state.liveKey;
-  var eff=0, mtd=0, wc=0, fl=0, rc=0, val=0, fcast=0, projSum=0, aEff=0, aMtd=0, mm={}, amm={}, drop=null;
+  var eff=0, mtd=0, wc=0, fl=0, rc=0, ct=0, val=0, leadsSum=0, fcast=0, projSum=0, aEff=0, aMtd=0, mm={}, amm={}, drop=null;
   camps.forEach(function(c){
     var cd=campDerive(c);
-    eff+=cd.effBudget; mtd+=cd.mtd; wc+=cd.wc; fl+=cd.fl; rc+=cd.rc; val+=cd.val;
+    eff+=cd.effBudget; mtd+=cd.mtd; wc+=cd.wc; fl+=cd.fl; rc+=cd.rc; ct+=(cd.ct||0); val+=cd.val; leadsSum+=(cd.leads||0);
     if(live||isPast){ fcast += (cd.forecast!=null?cd.forecast:cd.mtd); }
     if(live){ projSum += (cd.proj?cd.proj.proj:cd.mtd); }
     c.daily.forEach(function(p){ (mm[p.date]||(mm[p.date]={date:p.date,cost:0})).cost+=p.cost; });
@@ -405,8 +445,8 @@ function acctDerive(acc){
   var p={ forecast:forecast, effBudget:eff, mtd:mtd,
           pace:(eff>0&&forecast!=null)?forecast/eff:null,
           variance:(forecast!=null)?forecast-eff:null };
-  p.wc=wc; p.fl=fl; p.rc=rc; p.val=val; p.nCamps=camps.length;
-  p.leads = fl + rc;
+  p.wc=wc; p.fl=fl; p.rc=rc; p.ct=ct; p.val=val; p.nCamps=camps.length;
+  p.leads = leadsSum;                                   // sum of each campaign's configured lead sources
   p.cpl = (p.leads>0 && mtd>0) ? mtd/p.leads : null;
   p.roas = val>0 && mtd>0 ? val/mtd : null;
   var dl=Math.max(0, ctx().dim-ctx().elapsed);
@@ -482,9 +522,8 @@ FB.render = function(baseHtml){
   accounts.forEach(function(a){ acctVisibleCampaigns(a).forEach(function(c){ var dd=campSpendDrop(c); if(dd){ dropCount++; if(dd.level==='critical') dropCrit++; } }); });
   if(state.fbFilterDrops) accounts=accounts.filter(function(a){ return acctVisibleCampaigns(a).some(function(c){ return campSpendDrop(c); }); });
   // summary
-  var t={mtd:0,forecast:0,budget:0,proj:0,wc:0,fl:0,rc:0,val:0};
-  accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); t.wc+=d.wc; t.fl+=d.fl; t.rc+=d.rc; t.val+=d.val; });
-  t.leads = t.fl + t.rc;
+  var t={mtd:0,forecast:0,budget:0,proj:0,wc:0,fl:0,rc:0,ct:0,val:0,leads:0};
+  accounts.forEach(function(a){ var d=acctDerive(a); t.mtd+=d.mtd; t.forecast+=d.forecast||0; t.budget+=d.effBudget||0; t.proj+=(d.proj?d.proj.proj:(d.forecast||0)); t.wc+=d.wc; t.fl+=d.fl; t.rc+=d.rc; t.ct+=(d.ct||0); t.val+=d.val; t.leads+=(d.leads||0); });
   t.cpl = (t.leads>0 && t.mtd>0) ? t.mtd/t.leads : null;
   t.roas = t.val>0 && t.mtd>0 ? t.val/t.mtd : null;
   var isPast=state.viewMonth<state.liveKey, showVals=isLive||isPast;
@@ -656,20 +695,60 @@ function fbManageModalHTML(){
   var nActive=0; list.forEach(function(a){ if(a.active) nActive++; });
   function rowHTML(a){
     var nm = state.fbAcctName[a.account]!=null ? state.fbAcctName[a.account] : (a.name||'');
+    var sel = fbLeadSources(a.account);
+    var chips = FB_LEAD_SOURCES.map(function(s){
+      var on = sel.indexOf(s.key)>=0;
+      return '<button class="leadchip'+(on?' on':'')+'" data-act="fb-lead-toggle" data-acct="'+esc(a.account)+'" data-key="'+s.key+'" title="'+esc(s.full)+'">'+esc(s.label)+'</button>';
+    }).join('');
     return '<div class="mac-row'+(a.active?' on':'')+'">'
+      + '<div class="mac-main">'
       + '<label class="mac-tog" title="'+(a.active?'Managed — pulling data':'Not managed — no data pulled')+'"><input type="checkbox" class="fb-acct-active" data-acct="'+esc(a.account)+'"'+(a.active?' checked':'')+'><span class="mac-slider"></span></label>'
       + '<div class="mac-names"><input class="fb-acct-rename" data-acct="'+esc(a.account)+'" value="'+esc(nm)+'" placeholder="'+esc(a.account)+'" spellcheck="false">'
       + '<div class="mac-raw" title="Account name in the sheet (unchanged)">'+esc(a.account)+'</div></div>'
-      + '<span class="mac-state '+(a.active?'on':'off')+'">'+(a.active?'Active':'Inactive')+'</span></div>';
+      + '<span class="mac-state '+(a.active?'on':'off')+'">'+(a.active?'Active':'Inactive')+'</span>'
+      + '</div>'
+      + '<div class="mac-leads"><span class="mac-leads-l" title="Which column(s) count as a Lead / conversion for this client — drives the Leads and CPL columns">Leads count</span>'+chips+'</div>'
+      + '</div>';
   }
   var body = list.length ? list.map(rowHTML).join('') : '<div class="mac-empty">No accounts found in the sheet yet.</div>';
   return '<div class="modal-overlay" data-act="fb-manage-close"><div class="modal mac-modal">'
     + '<div class="modal-head"><span class="modal-title">Manage Facebook accounts</span><button class="modal-x" data-act="fb-manage-close">×</button></div>'
-    + '<div class="mac-sub">Toggle which accounts are <b>managed</b> — only active accounts pull data and pace. <b>Rename</b> is tool-only and doesn’t touch the sheet. Changes are shared with the team.</div>'
+    + '<div class="mac-sub">Toggle which accounts are <b>managed</b> — only active accounts pull data and pace. <b>Rename</b> is tool-only and doesn’t touch the sheet. <b>Leads count</b> picks which conversion column(s) feed each client’s Leads / CPL (default is On Facebook Leads + Website registrations). Changes are shared with the team.</div>'
     + '<div class="mac-count"><b>'+nActive+'</b> active · '+(list.length-nActive)+' inactive <span class="saveind '+state.fbSave+'" id="fb-mac-saveind">'+fbSaveText()+'</span></div>'
     + '<div class="mac-list">'+body+'</div>'
     + '<div class="modal-actions"><button class="btn primary" data-act="fb-manage-close">Done</button></div>'
     + '</div></div>';
+}
+// Toggle one lead-source key for an account, then persist the whole set. Applied
+// optimistically (re-render the modal immediately) and saved team-wide. An empty
+// selection is allowed and stored as "" → the tool falls back to the default.
+function fbToggleLead(acct, key){
+  if(!acct || !key) return;
+  var cur = (state.fbAcctLeads[acct] || fbLeadSources(acct)).slice();
+  var i = cur.indexOf(key);
+  if(i>=0) cur.splice(i,1); else {
+    // keep the canonical column order so the stored string + tooltip read consistently
+    cur.push(key);
+    cur = FB_LEAD_SOURCES.map(function(s){return s.key;}).filter(function(k){ return cur.indexOf(k)>=0; });
+  }
+  state.fbAcctLeads[acct] = cur;
+  (state.fbAcctList||[]).forEach(function(a){ if(a.account===acct) a.leads=cur.join(','); });
+  render();                                  // reflect the chip + every Leads/CPL cell live
+  fbSaveLeads(acct, cur.join(','));
+}
+var fbLeadTimers={};
+function fbSaveLeads(acct, leads){
+  state.fbSave='saving'; fbUpdateSaveInd(); fbUpdateMacSaveInd();
+  clearTimeout(fbLeadTimers[acct]);
+  fbLeadTimers[acct]=setTimeout(function(){
+    if(WEBAPP_URL.indexOf('http')!==0){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); return; }
+    jsonp({ action:'setFbLeads', account:acct, leads:leads })
+      .then(function(r){
+        if(r && r.ok){ state.fbSave='saved'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); setTimeout(function(){ if(state.fbSave==='saved'){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); } },1400); }
+        else { state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); toast('Couldn’t save — redeploy the gateway as a new version'); }
+      })
+      .catch(function(){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); toast('Couldn’t reach the gateway'); });
+  }, 400);
 }
 var fbRenameTimers={};
 function fbScheduleRename(acct, name){
@@ -749,7 +828,7 @@ function acctRowHTML(a,isLive){
     + '<div class="c-num fb-var '+(d.variance>0?'neg':'pos')+'">'+(showVals&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
     + (isLive?trendCellHTML(d.proj,d.burn):(isPast?fbTrendCellPast(d):'<div class="c-num cell-trend">—</div>'))
     + '<div class="c-num">'+cl(intf(d.wc))+'</div>'
-    + '<div class="c-num">'+cl(intf(d.leads))+'</div>'
+    + '<div class="c-num" title="'+esc(fbLeadLabel(a.account))+'">'+cl(intf(d.leads))+'</div>'
     + '<div class="c-num">'+cl(d.cpl!=null?money(d.cpl):'—')+'</div>'
     + '<div class="c-num">'+cl(d.val>0?money(d.val,true):'—')+'</div>'
     + '<div class="c-num">'+cl(xfmt(d.roas))+'</div>'
@@ -833,7 +912,7 @@ function campRowHTML(a,camp,isLive){
     + '<div class="c-num fb-var '+(d.variance>0?'neg':'pos')+'">'+(showVals&&d.variance!=null?((d.variance>0?'+':'')+money(d.variance,true)):'—')+'</div>'
     + (isLive?trendCellHTML(d.proj,d.burn):(isPast?fbTrendCellPast(d):'<div class="c-num cell-trend">—</div>'))
     + '<div class="c-num">'+cl(intf(d.wc))+'</div>'
-    + '<div class="c-num">'+cl(intf(d.leads))+'</div>'
+    + '<div class="c-num" title="'+esc(fbLeadLabel(camp.account))+'">'+cl(intf(d.leads))+'</div>'
     + '<div class="c-num">'+cl(d.cpl!=null?money(d.cpl):'—')+'</div>'
     + '<div class="c-num">'+cl(d.val>0?money(d.val,true):'—')+'</div>'
     + '<div class="c-num">'+cl(xfmt(d.roas))+'</div>'
@@ -1036,6 +1115,7 @@ document.addEventListener('click', function(e){
   else if(act==='fb-slack-cancel'){ if(el.classList.contains('modal-overlay') && e.target!==el) return; fbCloseSlack(); }
   else if(act==='fb-manage'){ state.fbManageOpen=true; render(); }
   else if(act==='fb-manage-close'){ if(el.classList.contains('modal-overlay') && e.target!==el) return; state.fbManageOpen=false; render(); }
+  else if(act==='fb-lead-toggle'){ fbToggleLead(el.getAttribute('data-acct'), el.getAttribute('data-key')); }
 });
 document.addEventListener('input', function(e){
   if(state.view!=='facebook') return;
