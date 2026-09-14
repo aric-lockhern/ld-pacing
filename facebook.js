@@ -98,6 +98,7 @@ if(state.fbDetailDays==null) state.fbDetailDays=30;
   + '.mac-state.on{color:var(--good);background:var(--good-bg);}'
   + '.mac-state.off{color:var(--faint);background:var(--line2);}'
   + '.mac-empty{padding:18px;text-align:center;color:var(--faint);font-size:13px;}'
+  + '.mac-warn{font-size:12px;line-height:1.5;color:#8a4b00;background:#fff4e5;border:1px solid #f0c98a;border-radius:8px;padding:8px 10px;margin-bottom:8px;}'
   // sortable Social headers (Search uses .head .sortable; the FB table is .fbhead)
   + '.fbhead .sortable{cursor:pointer;user-select:none;}'
   + '.fbhead .sortable:hover{color:var(--muted);}'
@@ -714,6 +715,7 @@ function fbManageModalHTML(){
   return '<div class="modal-overlay" data-act="fb-manage-close"><div class="modal mac-modal">'
     + '<div class="modal-head"><span class="modal-title">Manage Facebook accounts</span><button class="modal-x" data-act="fb-manage-close">×</button></div>'
     + '<div class="mac-sub">Toggle which accounts are <b>managed</b> — only active accounts pull data and pace. <b>Rename</b> is tool-only and doesn’t touch the sheet. <b>Leads count</b> picks which conversion column(s) feed each client’s Leads / CPL (default is On Facebook Leads + Website registrations). Changes are shared with the team.</div>'
+    + (state.fbGatewayStale?'<div class="mac-warn">⚠ <b>Lead-source changes aren’t saving.</b> The Apps Script gateway is running an older version that doesn’t support this yet. In script.google.com open the gateway project → <b>Deploy → Manage deployments → Edit → New version → Deploy</b>, then Refresh. Web Contacts data also needs that redeploy.</div>':'')
     + '<div class="mac-count"><b>'+nActive+'</b> active · '+(list.length-nActive)+' inactive <span class="saveind '+state.fbSave+'" id="fb-mac-saveind">'+fbSaveText()+'</span></div>'
     + '<div class="mac-list">'+body+'</div>'
     + '<div class="modal-actions"><button class="btn primary" data-act="fb-manage-close">Done</button></div>'
@@ -744,8 +746,12 @@ function fbSaveLeads(acct, leads){
     if(WEBAPP_URL.indexOf('http')!==0){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); return; }
     jsonp({ action:'setFbLeads', account:acct, leads:leads })
       .then(function(r){
-        if(r && r.ok){ state.fbSave='saved'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); setTimeout(function(){ if(state.fbSave==='saved'){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); } },1400); }
-        else { state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); toast('Couldn’t save — redeploy the gateway as a new version'); }
+        // An OLD gateway doesn't know this action and hits its catch-all, which
+        // replies {ok:true, service:'…'}. That would look like success, so treat
+        // the presence of `service` (i.e. the action wasn't handled) as "needs a
+        // redeploy" instead of silently pretending the change was saved.
+        if(r && r.ok && !r.service){ state.fbGatewayStale=false; state.fbSave='saved'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); setTimeout(function(){ if(state.fbSave==='saved'){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); } },1400); }
+        else { state.fbGatewayStale=true; state.fbSave='idle'; render(); toast('Not saved — the gateway needs to be redeployed as a new version'); }
       })
       .catch(function(){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); toast('Couldn’t reach the gateway'); });
   }, 400);
