@@ -77,8 +77,16 @@ read through the gateway's `fbData` action.
   touch it). The sheet's old `Active` column is now optional — it's used only as
   the default for an account the tool hasn't toggled yet (smooth migration). The
   gateway trims to the last 95 days.
-- **Leads** = `On Facebook Leads` + `Website registrations completed` (summed),
-  with a **CPL** column; purchase accounts still show Conversions/Revenue/ROAS.
+- **Leads** = `On Facebook Leads` + `Website registrations completed` (summed) by
+  default, with a **CPL** column; purchase accounts still show
+  Conversions/Revenue/ROAS. **Which column(s) count as Leads is configurable per
+  client** — in **⚙ Manage accounts**, each account has a **Leads count** row of
+  chips (FB Leads · Registrations · Web Contacts · Purchases); pick one or more.
+  A client like **Cedar Group** that tracks leads in a different column can switch
+  to **Web Contacts** (the `Website Contacts` column) instead. The selection is
+  stored team-wide in the `Facebook_Accounts` tab (a `Leads` column, comma-
+  separated keys; empty = the default). The optional `Website Contacts` column on
+  the `FB - Daily` sheet feeds this (the tool reads 0 if it's absent).
 - Two levels: an **account rollup** row, expandable to **per-campaign pacing**
   (each campaign has its own monthly budget).
 - Campaign budgets are stored in a `Facebook_Budgets` tab in the main sheet
