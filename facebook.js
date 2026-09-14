@@ -747,11 +747,13 @@ function fbSaveLeads(acct, leads){
     jsonp({ action:'setFbLeads', account:acct, leads:leads })
       .then(function(r){
         // An OLD gateway doesn't know this action and hits its catch-all, which
-        // replies {ok:true, service:'…'}. That would look like success, so treat
-        // the presence of `service` (i.e. the action wasn't handled) as "needs a
-        // redeploy" instead of silently pretending the change was saved.
+        // replies {ok:true, service:'…'} — that would look like success. A
+        // CURRENT gateway replies {ok:true} with no `service`. Any other {ok:false}
+        // is a real error (e.g. bad secret) and should show its message, NOT the
+        // redeploy banner.
         if(r && r.ok && !r.service){ state.fbGatewayStale=false; state.fbSave='saved'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); setTimeout(function(){ if(state.fbSave==='saved'){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); } },1400); }
-        else { state.fbGatewayStale=true; state.fbSave='idle'; render(); toast('Not saved — the gateway needs to be redeployed as a new version'); }
+        else if(r && r.service){ state.fbGatewayStale=true; state.fbSave='idle'; render(); toast('Not saved — the gateway needs to be redeployed as a new version'); }
+        else { state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); toast('Not saved — '+((r&&r.error)?String(r.error):'the gateway returned an error')); }
       })
       .catch(function(){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); toast('Couldn’t reach the gateway'); });
   }, 400);
