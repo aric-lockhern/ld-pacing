@@ -265,6 +265,20 @@ table.bd tr:last-child td{border-bottom:none;}
 .src{display:flex;flex-direction:column;gap:2px;}
 .src-label{font-size:11px;color:var(--faint);font-weight:600;}
 .src-value{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;}
+.convpicker{margin-top:14px;background:var(--editbg);border:1px solid var(--editline);border-radius:10px;padding:13px 14px;}
+.cp-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.cp-title{font-weight:700;font-size:13px;color:var(--ink);}
+.cp-note{font-size:11.5px;color:var(--faint);}
+.cp-note.on{color:var(--accent);font-weight:600;}
+.cp-head .mini{margin-left:auto;}
+.cp-sub{font-size:12px;color:var(--muted);margin:4px 0 10px;line-height:1.45;}
+.cp-list{max-height:230px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff;}
+.convopt{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:6px;cursor:pointer;font-size:12.5px;}
+.convopt:hover{background:var(--editbg);}
+.convopt.on{background:var(--good-bg);}
+.convopt input{flex:0 0 auto;cursor:pointer;margin:0;}
+.convname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);}
+.convcount{flex:0 0 auto;font-variant-numeric:tabular-nums;color:var(--muted);font-weight:600;font-size:11.5px;}
 .budgetbox{margin-top:14px;background:var(--editbg);border:1px solid var(--editline);border-radius:10px;padding:13px 14px;}
 .bb-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--under);margin-bottom:11px;}
 .bb-controls{display:flex;align-items:center;gap:16px;flex-wrap:wrap;}
@@ -358,6 +372,7 @@ var ACTIVE_LABEL = 'active';
 /* ---- state ---- */
 var state = {
   accounts: [], budgets: {}, open: {}, dailyByClient: {},
+  convByClient: {}, convPrefs: {}, convLoaded: false,   // per-conversion-action data + each client's selected actions
   rawG: [], rawM: [], rawDailyG: [], rawDailyM: [], groups: {}, hidden: {}, types: {}, managers: {}, discipline: {}, team: [], slackUsers: [], dismiss: {}, selected: {},
   changelog: null, changelogLoading: false,
   view: 'pacing', showAll: false, showHidden: false, filterIssues: false, filterWins: false, detailDays: 30, slackFor: null,
@@ -428,6 +443,9 @@ function loadData(){
     state.feedUpdated = stamps.length ? stamps[stamps.length-1] : '';
     state.source='live'; render(); hideBoot();
     if(!state._slackFetched){ state._slackFetched=true; jsonp({action:'slackUsers'}).then(function(r){ if(r&&r.ok&&r.users){ state.slackUsers=r.users; render(); } }).catch(function(){}); }
+    // Per-conversion-action data is potentially large, so it loads separately
+    // (after the main table is up) rather than blocking the initial render.
+    jsonp({action:'convData'}, 60000).then(function(r){ if(r&&r.ok){ convToState(r); render(); } }).catch(function(){});
   }).catch(function(err){
     // The request reached us but FAILED (blocked by an extension, offline,
     // gateway error/redeploy needed, bad secret). Show a real error — don't
@@ -637,6 +655,30 @@ function scheduleSave(client, month, b){
   }, 700);
 }
 
+/* ---- per-client conversion-action selection (Search) ---- */
+var convSaveTimers={};
+function toggleConvAction(client, action, on){
+  if(!client || !action) return;
+  var cur=(state.convPrefs[client]||[]).slice(), i=cur.indexOf(action);
+  if(on){ if(i<0) cur.push(action); } else if(i>=0){ cur.splice(i,1); }
+  if(cur.length) state.convPrefs[client]=cur; else delete state.convPrefs[client];
+  render();                          // Conversions / CPA / ROAS follow immediately
+  saveConvPrefs(client, cur);
+}
+function clearConvPrefs(client){
+  delete state.convPrefs[client]; render(); saveConvPrefs(client, []);
+}
+function saveConvPrefs(client, actions){
+  state.save='saving'; updateSaveInd();
+  clearTimeout(convSaveTimers[client]);
+  convSaveTimers[client]=setTimeout(function(){
+    if(WEBAPP_URL.indexOf('http')!==0){ state.save='idle'; updateSaveInd(); return; }
+    jsonp({ action:'setConvPrefs', client:client, actions:actions.join('\n') })
+      .then(function(r){ if(r&&r.ok&&!r.service){ state.save='saved'; updateSaveInd(); setTimeout(function(){ state.save='idle'; updateSaveInd(); },1400); } else { state.save='idle'; updateSaveInd(); } })
+      .catch(function(){ state.save='idle'; updateSaveInd(); });
+  }, 500);
+}
+
 /* ---- month / derive ---- */
 function monthKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
 function parseKey(k){ var p=k.split('-'); return {y:+p[0],m:+p[1]-1}; }
@@ -776,6 +818,51 @@ function monthAgg(client, ym){
   (state.dailyByClient[client]||[]).forEach(function(p){ if(String(p.date).slice(0,7)===ym){ o.spend+=(p.spend||0); o.conv+=(p.conv||0); o.rev+=(p.rev||0); } });
   return o;
 }
+/* ---- per-conversion-action data (Search) ----
+   Each client can pick which conversion action(s) count as its reported
+   Conversions (e.g. Purchases only, not Add to cart). Fed by the Daily_*_Conv
+   tabs. Default (no selection) = the account's headline conversions, unchanged. */
+function convToState(res){
+  var byClient = {};   // client -> { actions:{action:{conv,val}}, byMA:{ym:{action:{conv,val}}} }
+  function ingest(rows){
+    (rows||[]).forEach(function(r){
+      var id=String(r.AccountId||'').trim();
+      var client=(state.groups[id] || r.Client || r.Account || '').trim();   // honor in-tool grouping, like effClient
+      var action=String(r.Action||'').trim();
+      if(!client || !action) return;
+      var ym=normDate(r.Date).slice(0,7), conv=toNum(r.Conv), val=toNum(r.Value);
+      var c=byClient[client] || (byClient[client]={actions:{},byMA:{}});
+      var tot=c.actions[action] || (c.actions[action]={conv:0,val:0}); tot.conv+=conv; tot.val+=val;
+      var m=c.byMA[ym] || (c.byMA[ym]={});
+      var ma=m[action] || (m[action]={conv:0,val:0}); ma.conv+=conv; ma.val+=val;
+    });
+  }
+  ingest(res.convActions && res.convActions.Google);
+  ingest(res.convActions && res.convActions.Microsoft);
+  state.convByClient=byClient;
+  var prefs={};
+  (res.convPrefs||[]).forEach(function(r){
+    var client=String(r.Client||'').trim(); if(!client) return;
+    var acts=String(r.Actions||'').split('\n').map(function(s){return s.trim();}).filter(Boolean);
+    if(acts.length) prefs[client]=acts;
+  });
+  state.convPrefs=prefs; state.convLoaded=true;
+}
+// Actions a client records, most conversions first (drives the picker list).
+function convActionsFor(client){
+  var c=state.convByClient[client]; if(!c) return [];
+  return Object.keys(c.actions).map(function(a){ return {action:a, conv:c.actions[a].conv, val:c.actions[a].val}; })
+    .sort(function(x,y){ return y.conv-x.conv; });
+}
+function hasConvSelection(client){ var s=state.convPrefs[client]; return !!(s && s.length); }
+// Conversions/value from the SELECTED actions for one month; null = no override.
+function selectedConvFor(client, ym){
+  var c=state.convByClient[client]; if(!c) return null;
+  var sel=state.convPrefs[client]; if(!sel || !sel.length) return null;
+  var m=c.byMA[ym]||{}, o={conv:0,val:0};
+  sel.forEach(function(a){ if(m[a]){ o.conv+=m[a].conv; o.val+=m[a].val; } });
+  return o;
+}
 function derive(acc){
   var c=ctx();
   var lastMoTotal=acc.g.last+acc.m.last, b=getBudget(acc.client);
@@ -796,6 +883,13 @@ function derive(acc){
   } else {
     // FUTURE (planning) month: nothing spent yet
     mtd=0; conv=0; val=0; forecast=null;
+  }
+  // If this client has picked specific conversion action(s), the reported
+  // Conversions / value (→ CPA / ROAS) come from just those actions for the
+  // viewed month. Spend and forecast are untouched. No pick → headline totals.
+  if(hasConvSelection(acc.client)){
+    var sc=selectedConvFor(acc.client, state.viewMonth);
+    if(sc){ conv=sc.conv; val=sc.val; }
   }
   var pace = effBudget>0 && forecast!=null ? forecast/effBudget : null;
   var variance = forecast!=null ? forecast-effBudget : null;
@@ -1302,6 +1396,7 @@ function rowHTML(a,isLive){
       + '<div class="synced-note">🔒 Sourced from the platform feed — read-only.</div>'
       + (isPast ? monthReadoutHTML(a,d,ty==='ecomm')
                 : '<div class="platforms">'+readout('Google Ads',a.g,a.hasG,a.ids.g,ty==='ecomm')+readout('Microsoft Ads',a.m,a.hasM,a.ids.m,ty==='ecomm')+'</div>')
+      + convPickerHTML(a)
       + '<div class="budgetbox"><div class="bb-title">'+esc(monthLabel(state.viewMonth))+' budget</div><div class="bb-controls">'
       + '<div class="segment"><button class="'+(b.mode!=='lastMonth'?'on':'')+'" data-act="mode-manual" data-client="'+esc(a.client)+'">Set manually</button>'
       + '<button class="'+(b.mode==='lastMonth'?'on':'')+'" data-act="mode-lm" data-client="'+esc(a.client)+'">Use last month</button></div>'
@@ -1342,6 +1437,29 @@ function monthSummaryStripHTML(a,d){
     + '<div class="rp"><span class="rp-l">Avg / day</span><span class="rp-v">'+money(dim>0?total/dim:0)+'</span><span class="rp-r">over '+dim+' days</span></div>'
     + (active?('<div class="rp"><span class="rp-l">Active days</span><span class="rp-v">'+active+'</span><span class="rp-r">of '+dim+' · busiest '+money(best)+'</span></div>'):'')
     + '</div>';
+}
+
+/* Per-client conversion-action picker (Search). Lists every action the client
+   records; ticking some makes Conversions / CPA / ROAS count only those. */
+function convPickerHTML(a){
+  if(!state.convLoaded) return '';
+  var list=convActionsFor(a.client);
+  if(!list.length) return '';   // no per-action data for this client (e.g. Bing-only, or feed not updated yet)
+  var sel=state.convPrefs[a.client]||[], selSet={}; sel.forEach(function(x){ selSet[x]=true; });
+  var on=sel.length>0;
+  var opts=list.map(function(it){
+    var checked=!!selSet[it.action];
+    return '<label class="convopt'+(checked?' on':'')+'"><input type="checkbox" class="conv-act" data-client="'+esc(a.client)+'" data-action="'+esc(it.action)+'"'+(checked?' checked':'')+'>'
+      + '<span class="convname" title="'+esc(it.action)+'">'+esc(it.action)+'</span>'
+      + '<span class="convcount" title="conversions over the loaded window">'+intf(it.conv)+'</span></label>';
+  }).join('');
+  return '<div class="convpicker">'
+    + '<div class="cp-head"><span class="cp-title">Conversions counted</span>'
+      + '<span class="cp-note'+(on?' on':'')+'">'+(on?('Counting '+sel.length+' selected action'+(sel.length===1?'':'s')):'Account default — all reported conversions')+'</span>'
+      + (on?'<button class="mini" data-act="conv-clear" data-client="'+esc(a.client)+'">Reset to default</button>':'')
+      + '</div>'
+    + '<div class="cp-sub">Pick the conversion action(s) that count as this client’s <b>Conversions</b> / CPA'+(isEcomm(a)?' / ROAS':'')+' — e.g. Purchases only. Numbers are conversions over the loaded window; leave all unticked to keep the account default.</div>'
+    + '<div class="cp-list">'+opts+'</div></div>';
 }
 
 /* ---- daily detail (charts + breakdown) ---- */
@@ -1889,6 +2007,7 @@ document.addEventListener('click', function(e){
   else if(act==='range'){ state.detailDays=parseInt(el.getAttribute('data-days'),10)||30; render(); }
   else if(act==='slack'){ state.slackFor=client; render(); var n=document.getElementById('slack-note'); if(n) n.focus(); }
   else if(act==='slack-send'){ sendSlack(); }
+  else if(act==='conv-clear'){ clearConvPrefs(client); }
   else if(act==='slack-cancel'){ if(el.classList.contains('modal-overlay') && e.target!==el) return; closeSlack(); }
   else if(act==='sort'){ toggleSort(el.getAttribute('data-key')); render(); }
   else if(act==='group'){ groupSelected(); }
@@ -1918,6 +2037,8 @@ document.addEventListener('change', function(e){
     if(e.target.checked) vis.forEach(function(a){ state.selected[a.client]=true; });
     else state.selected={};
     render();
+  } else if(e.target.classList.contains('conv-act')){
+    toggleConvAction(e.target.getAttribute('data-client'), e.target.getAttribute('data-action'), e.target.checked);
   }
 });
 document.addEventListener('input', function(e){
