@@ -9,10 +9,24 @@ on our servers).
 | File | Runs in | Writes |
 |---|---|---|
 | `google_feed.js` | Google Ads (MCC) | `Google_Feed`, `Daily_Google`, **`Daily_Google_Conv`** |
+| `microsoft_feed.js` | Microsoft Advertising | `Microsoft_Feed`, `Daily_Microsoft` (POSTed to the gateway) |
 
-> Microsoft/Bing has a matching feed script (writes `Microsoft_Feed` /
-> `Daily_Microsoft`). It isn't in the repo yet — paste it in and we'll version it
-> and add the same per-conversion-action tab (`Daily_Microsoft_Conv`).
+### Per-conversion-action is Google-only (a Bing limitation)
+
+Google's script breaks conversions out **by action** (`Daily_Google_Conv`), which
+powers the per-client conversion picker. **Bing can't do this here:** Microsoft's
+Scripts sandbox exposes only *total* conversions/revenue via the `Stats` object —
+there's no per-goal breakdown and no reporting API in that environment. So
+`microsoft_feed.js` does **not** write a `Daily_Microsoft_Conv` tab.
+
+Consequence for a client that runs on **both** platforms: its Google conversions
+can be filtered to specific actions, but its Bing conversions are counted as a
+whole. That's correct **if the Bing account only tracks Purchases** as a
+conversion (its total already equals purchases). If a Bing account also tracks
+add-to-cart etc. and you need them separated, the options are: set up the Bing
+account so only Purchases is a tracked conversion, or move Bing onto the
+Microsoft Reporting API (a separate integration). The tool labels Bing's
+contribution so it's never silently misleading.
 
 ## `google_feed.js`
 
