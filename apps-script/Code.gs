@@ -34,6 +34,8 @@ var BUDGET_HEADER  = ['Client', 'Month', 'Mode', 'Amount', 'Updated'];
 var GROUP_TAB      = 'Groups';
 var GROUP_HEADER   = ['AccountId', 'Platform', 'Account', 'Group', 'Hidden', 'Type', 'Manager', 'Updated', 'Discipline'];
 var DISMISS_TAB    = 'Dismissals';
+var CONVPREFS_TAB    = 'ConvPrefs';                        // per-client selected conversion actions (Search)
+var CONVPREFS_HEADER = ['Client', 'Actions', 'Updated'];   // Actions = comma-separated action names
 var DISMISS_HEADER = ['Client', 'Until', 'Updated'];
 var CHANGELOG_TAB    = 'Changelog';
 var CHANGELOG_HEADER = ['When', 'By', 'Area', 'Action', 'Target', 'Detail'];
@@ -135,6 +137,10 @@ function doGet(e) {
       out = changelog(p);
     } else if (p.action === 'setReminderDismiss') {
       out = setReminderDismiss(p);
+    } else if (p.action === 'convData') {
+      out = convData(p);
+    } else if (p.action === 'setConvPrefs') {
+      out = setConvPrefs(p);
     } else {
       out = { ok: true, service: 'Lockhern pacing gateway' };
     }
@@ -347,6 +353,43 @@ function setDismiss(p) {
   sheet.getRange(target, 2).setNumberFormat('@');
   sheet.getRange(target, 2).setValue(until);
   logChange_(p.by, 'Search', until ? 'Dismiss alert' : 'Restore alert', client, until ? ('until ' + until) : '');
+  return { ok: true };
+}
+
+/* ---- Search: per-conversion-action data + per-client action selection ----
+   convData is fetched lazily by the front-end (separate from the main `data`
+   load) so the potentially large per-action rows don't slow the initial load.
+   The Daily_*_Conv tabs are written by the additive Google Ads / Microsoft
+   conversion-action scripts; both are optional — missing tabs read as []. */
+function convData(p) {
+  requireSecret(p);
+  return {
+    ok: true,
+    convActions: {
+      Google:    readTab('Daily_Google_Conv').concat(readTab('Daily_Google_Conv_WL')),
+      Microsoft: readTab('Daily_Microsoft_Conv').concat(readTab('Daily_Microsoft_Conv_WL'))
+    },
+    convPrefs: readTab(CONVPREFS_TAB)
+  };
+}
+// Which conversion action(s) count as one client's reported Conversions.
+// Empty/absent = the tool falls back to the account's total (today's behavior).
+function setConvPrefs(p) {
+  requireSecret(p);
+  var client = String(p.client || '').trim();
+  if (!client) throw new Error('missing client');
+  var actions = String(p.actions || '').split('\n').map(function (s) { return s.trim(); })
+                .filter(function (s) { return s.length; }).join('\n');
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var sheet = ss.getSheetByName(CONVPREFS_TAB) || ss.insertSheet(CONVPREFS_TAB);
+  ensureHeader(sheet, CONVPREFS_HEADER);
+  var values = sheet.getDataRange().getValues(), target = -1;
+  for (var i = 1; i < values.length; i++) { if (String(values[i][0]).trim() === client) { target = i + 1; break; } }
+  var row = [client, actions, new Date().toISOString()];
+  if (target === -1) { sheet.appendRow(row); target = sheet.getLastRow(); }
+  else sheet.getRange(target, 1, 1, row.length).setValues([row]);
+  sheet.getRange(target, 2).setNumberFormat('@').setValue(actions);   // keep as text, no auto-format
+  logChange_(p.by, 'Search', 'Conversion actions', client, actions ? actions.replace(/\n/g, ', ') : '(all — default)');
   return { ok: true };
 }
 
