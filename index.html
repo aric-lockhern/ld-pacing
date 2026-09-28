@@ -830,11 +830,13 @@ function convToState(res){
       var client=(state.groups[id] || r.Client || r.Account || '').trim();   // honor in-tool grouping, like effClient
       var action=String(r.Action||'').trim();
       if(!client || !action) return;
-      var ym=normDate(r.Date).slice(0,7), conv=toNum(r.Conv), val=toNum(r.Value);
-      var c=byClient[client] || (byClient[client]={actions:{},byMA:{}});
+      var dstr=normDate(r.Date), ym=dstr.slice(0,7), conv=toNum(r.Conv), val=toNum(r.Value);
+      var c=byClient[client] || (byClient[client]={actions:{},byMA:{},byDA:{}});
       var tot=c.actions[action] || (c.actions[action]={conv:0,val:0}); tot.conv+=conv; tot.val+=val;
       var m=c.byMA[ym] || (c.byMA[ym]={});
       var ma=m[action] || (m[action]={conv:0,val:0}); ma.conv+=conv; ma.val+=val;
+      var dm=c.byDA[dstr] || (c.byDA[dstr]={});
+      var da=dm[action] || (dm[action]={conv:0,val:0}); da.conv+=conv; da.val+=val;
     });
   }
   ingest(res.convActions && res.convActions.Google);
@@ -862,6 +864,19 @@ function selectedConvFor(client, ym){
   var m=c.byMA[ym]||{}, o={conv:0,val:0};
   sel.forEach(function(a){ if(m[a]){ o.conv+=m[a].conv; o.val+=m[a].val; } });
   return o;
+}
+// date -> {conv,val} summed over the selected actions (for the daily detail);
+// null when the client has no selection (detail then shows headline numbers).
+function selectedConvByDate(client){
+  var c=state.convByClient[client]; if(!c) return null;
+  var sel=state.convPrefs[client]; if(!sel || !sel.length) return null;
+  var out={};
+  Object.keys(c.byDA).forEach(function(dt){
+    var m=c.byDA[dt], o={conv:0,val:0};
+    sel.forEach(function(a){ if(m[a]){ o.conv+=m[a].conv; o.val+=m[a].val; } });
+    out[dt]=o;
+  });
+  return out;
 }
 function derive(acc){
   var c=ctx();
@@ -1395,7 +1410,7 @@ function rowHTML(a,isLive){
       + (isPast ? monthSummaryStripHTML(a,d) : recentStripHTML(a,d))
       + '<div class="synced-note">🔒 Sourced from the platform feed — read-only.</div>'
       + (isPast ? monthReadoutHTML(a,d,ty==='ecomm')
-                : '<div class="platforms">'+readout('Google Ads',a.g,a.hasG,a.ids.g,ty==='ecomm')+readout('Microsoft Ads',a.m,a.hasM,a.ids.m,ty==='ecomm')+'</div>')
+                : '<div class="platforms">'+googleReadoutHTML(a,ty==='ecomm')+readout('Microsoft Ads',a.m,a.hasM,a.ids.m,ty==='ecomm')+'</div>')
       + convPickerHTML(a)
       + '<div class="budgetbox"><div class="bb-title">'+esc(monthLabel(state.viewMonth))+' budget</div><div class="bb-controls">'
       + '<div class="segment"><button class="'+(b.mode!=='lastMonth'?'on':'')+'" data-act="mode-manual" data-client="'+esc(a.client)+'">Set manually</button>'
@@ -1405,13 +1420,24 @@ function rowHTML(a,isLive){
   }
   return html;
 }
-function readout(title,plat,present,id,showRev){
+function readout(title,plat,present,id,showRev,sel){
   var p=plat||{spend:0,conv:0,val:0,last:0};
   function s(l,v){ return '<div class="src"><span class="src-label">'+l+'</span><span class="src-value">'+v+'</span></div>'; }
   return '<div class="readout'+(present?'':' off')+'"><div class="ro-head"><span>'+title+'</span>'+(present?('<span class="ro-id">'+esc(id||'')+'</span>'):'<span class="ro-off">not running</span>')+'</div>'
-    + '<div class="ro-grid">'+s('MTD spend',present?money(p.spend):'—')+s('Conversions',present?intf(p.conv):'—')
-    + (showRev?s('Revenue',present&&p.val>0?money(p.val):'—'):s('CPA',present&&p.conv>0?money(p.spend/p.conv):'—'))
+    + '<div class="ro-grid">'+s('MTD spend',present?money(p.spend):'—')+s('Conversions'+(sel?' (selected)':''),present?intf(p.conv):'—')
+    + (showRev?s('Revenue'+(sel?' (selected)':''),present&&p.val>0?money(p.val):'—'):s('CPA',present&&p.conv>0?money(p.spend/p.conv):'—'))
     + s('Last mo. spend',present?money(p.last):'—')+'</div></div>';
+}
+// Google readout, with Conversions/Revenue swapped to the selected actions when
+// this client has a pick (keeps the platform box consistent with the row + picker).
+function googleReadoutHTML(a, showRev){
+  if(hasConvSelection(a.client) && state.viewMonth===state.liveKey){
+    var sc=selectedConvFor(a.client, state.viewMonth)||{conv:0,val:0};
+    var g={}; for(var k in a.g){ if(a.g.hasOwnProperty(k)) g[k]=a.g[k]; }
+    g.conv=sc.conv; g.val=sc.val;
+    return readout('Google Ads', g, a.hasG, a.ids.g, showRev, true);
+  }
+  return readout('Google Ads', a.g, a.hasG, a.ids.g, showRev);
 }
 /* Completed-month readout. History is stored combined (the daily feed isn't
    split by platform), so a past month shows one account-total box instead of
@@ -1879,6 +1905,10 @@ function detailHTML(a,d){
     var ck=mk+'|'+amt, e=_expCache[ck]||(_expCache[ck]=dowExpected(a.client, mk, amt));
     return e.at(dayNum)-e.at(dayNum-1);
   }
+  // When the client has picked specific conversion actions, the daily Conv /
+  // CPA / Revenue / ROAS reflect just those actions (spend and clicks/impr are
+  // unchanged). No pick → the account's headline daily conversions.
+  var convByDate = selectedConvByDate(a.client);
   var cum=0, cexp=0, clin=0, rows=[], _iso=wStart, _i=0;
   while(_iso<=endRef){
     var p=rich[_iso]||{date:_iso,spend:0,conv:0,clicks:0,impr:0,rev:0};
@@ -1887,8 +1917,10 @@ function detailHTML(a,d){
     var amt=(b.mode==='lastMonth')?d.lastMoTotal:b.amount;
     var dayNum=+_iso.slice(8,10), flat=(amt>0?amt/daysInMonthOf(mk):0), tgt=_expInc(mk,amt,dayNum);
     cexp += tgt; clin += flat;
-    rows.push({ i:_i, date:_iso, spend:p.spend, cum:cum, expected:cexp, expectedLinear:clin, target:tgt, conv:p.conv,
-             cpa:p.conv>0?p.spend/p.conv:null, rev:p.rev, roas:(p.rev>0&&p.spend>0)?p.rev/p.spend:null,
+    var dconv=p.conv, drev=p.rev;
+    if(convByDate){ var cd=convByDate[_iso]||{conv:0,val:0}; dconv=cd.conv; drev=cd.val; }
+    rows.push({ i:_i, date:_iso, spend:p.spend, cum:cum, expected:cexp, expectedLinear:clin, target:tgt, conv:dconv,
+             cpa:dconv>0?p.spend/dconv:null, rev:drev, roas:(drev>0&&p.spend>0)?drev/p.spend:null,
              clicks:p.clicks, impr:p.impr });
     _iso=isoAdd(_iso,1); _i++;
   }

@@ -36,9 +36,10 @@ Three tabs:
 - `Google_Feed` — account MTD spend / conversions / value (+ last-month spend). *unchanged*
 - `Daily_Google` — per-day spend / leads / clicks / impressions / revenue. *unchanged*
 - **`Daily_Google_Conv`** — `Client | Account | AccountId | Platform | Date | Action | Conv | Value`,
-  one row per day per conversion **action**. Uses `all_conversions`, so every
-  action shows up (including secondary ones like *Add to cart* that aren't in the
-  account's headline "Conversions"). This is what powers the per-client
+  one row per day per conversion **action**. Uses `metrics.conversions` /
+  `conversions_value`, so the per-action numbers match the Google Ads
+  "Conversions" column exactly and sum to the account's headline conversions
+  (only actions set to count as a conversion appear). This is what powers the per-client
   conversion picker in the tool.
 
 **Additive & safe:** the two existing tabs are untouched. Until someone picks

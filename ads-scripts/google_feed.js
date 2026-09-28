@@ -23,8 +23,9 @@
  *                      Conv | Value        ← per conversion ACTION (Purchases,
  *                      Add to cart, …) so the tool can let each client pick which
  *                      action(s) count as its reported Conversions. Additive; the
- *                      other two tabs are unchanged. Uses all_conversions so every
- *                      action shows up (incl. secondary ones not in "Conversions").
+ *                      other two tabs are unchanged. Uses metrics.conversions so
+ *                      the numbers match the Google Ads "Conversions" column and
+ *                      sum to the account's headline conversions.
  * ------------------------------------------------------------------ */
 
 var SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/19AOeg1RK0O09hJQpU1ItDRnYBEuNg2aGnyWzpgv_Sqk/';
@@ -121,26 +122,28 @@ function collectDaily(client, name, cid, out) {
 
 /**
  * Per conversion-ACTION daily metrics (Purchases, Add to cart, Begin checkout, …),
- * one row per (day, action) at the account level. Uses metrics.all_conversions so
- * EVERY action is broken out — including secondary actions that aren't counted in
- * the account's headline "Conversions" column — which is what lets each client pick
- * the action(s) that matter for its reporting. Additive: does not affect the
- * Google_Feed / Daily_Google numbers.
+ * one row per (day, action) at the account level. Uses metrics.conversions /
+ * conversions_value — the SAME numbers as the Google Ads "Conversions" / "Conv.
+ * value" columns — so a client's picked action(s) match Google Ads exactly, and
+ * the per-action rows sum to the account's headline Conversions. (This means only
+ * actions set to "count as a conversion" appear; a purely secondary action reads
+ * as 0, which is correct — it isn't counted anywhere.) Additive: does not affect
+ * the Google_Feed / Daily_Google numbers.
  */
 function collectConvActions(client, name, cid, out) {
   var tz = AdsApp.currentAccount().getTimeZone();
   var end = new Date(), start = new Date(); start.setDate(start.getDate() - (LOOKBACK_DAYS - 1));
   var s = Utilities.formatDate(start, tz, 'yyyy-MM-dd'), e = Utilities.formatDate(end, tz, 'yyyy-MM-dd');
   var q = 'SELECT segments.date, segments.conversion_action_name, ' +
-          'metrics.all_conversions, metrics.all_conversions_value ' +
+          'metrics.conversions, metrics.conversions_value ' +
           "FROM customer WHERE segments.date BETWEEN '" + s + "' AND '" + e + "' ORDER BY segments.date";
   var report;
   try { report = AdsApp.report(q).rows(); }
   catch (err) { Logger.log('Conversion-action query failed for "' + name + '": ' + err); return; }
   while (report.hasNext()) {
     var r = report.next();
-    var conv = Number(r['metrics.all_conversions']) || 0;
-    var val  = Number(r['metrics.all_conversions_value']) || 0;
+    var conv = Number(r['metrics.conversions']) || 0;
+    var val  = Number(r['metrics.conversions_value']) || 0;
     if (!conv && !val) continue;
     out.push([
       client, name, cid, 'Google', r['segments.date'],
