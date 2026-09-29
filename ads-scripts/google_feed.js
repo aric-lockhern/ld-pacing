@@ -20,12 +20,12 @@
  *   Daily_Google       Client | Account | AccountId | Platform | Date | Spend |
  *                      Leads | Clicks | Impressions | Revenue
  *   Daily_Google_Conv  Client | Account | AccountId | Platform | Date | Action |
- *                      Conv | Value        ← per conversion ACTION (Purchases,
- *                      Add to cart, …) so the tool can let each client pick which
- *                      action(s) count as its reported Conversions. Additive; the
- *                      other two tabs are unchanged. Uses metrics.conversions so
- *                      the numbers match the Google Ads "Conversions" column and
- *                      sum to the account's headline conversions.
+ *                      Conv | Value | ConvT | ValueT   ← per conversion ACTION
+ *                      (Purchases, Add to cart, …) so the tool can let each client
+ *                      pick which action(s) count as its Conversions. Conv/Value =
+ *                      by interaction (click) date (matches Google Ads); ConvT/
+ *                      ValueT = by conversion time. Additive; the other two tabs
+ *                      are unchanged.
  * ------------------------------------------------------------------ */
 
 var SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/19AOeg1RK0O09hJQpU1ItDRnYBEuNg2aGnyWzpgv_Sqk/';
@@ -122,35 +122,49 @@ function collectDaily(client, name, cid, out) {
 
 /**
  * Per conversion-ACTION daily metrics (Purchases, Add to cart, Begin checkout, …),
- * one row per (day, action) at the account level. Uses metrics.conversions /
- * conversions_value — the SAME numbers as the Google Ads "Conversions" / "Conv.
- * value" columns — so a client's picked action(s) match Google Ads exactly, and
- * the per-action rows sum to the account's headline Conversions. (This means only
- * actions set to "count as a conversion" appear; a purely secondary action reads
- * as 0, which is correct — it isn't counted anywhere.) Additive: does not affect
- * the Google_Feed / Daily_Google numbers.
+ * one row per (day, action) at the account level, in TWO attribution bases:
+ *   Conv / Value   = metrics.conversions        — by interaction (click) date.
+ *                    Matches the Google Ads "Conversions" / "Conv. value" columns
+ *                    and sums to the account's headline Conversions.
+ *   ConvT / ValueT = *_by_conversion_date        — by the date the conversion
+ *                    actually happened ("Conversions (by conv. time)").
+ * The tool lets each client flip between the two. Both come from separate queries
+ * because Google buckets segments.date differently for the two metric families.
+ * Only actions set to count as a conversion appear (secondary-only reads as 0).
+ * Additive: does not affect the Google_Feed / Daily_Google numbers.
  */
 function collectConvActions(client, name, cid, out) {
   var tz = AdsApp.currentAccount().getTimeZone();
   var end = new Date(), start = new Date(); start.setDate(start.getDate() - (LOOKBACK_DAYS - 1));
   var s = Utilities.formatDate(start, tz, 'yyyy-MM-dd'), e = Utilities.formatDate(end, tz, 'yyyy-MM-dd');
-  var q = 'SELECT segments.date, segments.conversion_action_name, ' +
-          'metrics.conversions, metrics.conversions_value ' +
-          "FROM customer WHERE segments.date BETWEEN '" + s + "' AND '" + e + "' ORDER BY segments.date";
-  var report;
-  try { report = AdsApp.report(q).rows(); }
-  catch (err) { Logger.log('Conversion-action query failed for "' + name + '": ' + err); return; }
-  while (report.hasNext()) {
-    var r = report.next();
-    var conv = Number(r['metrics.conversions']) || 0;
-    var val  = Number(r['metrics.conversions_value']) || 0;
-    if (!conv && !val) continue;
-    out.push([
-      client, name, cid, 'Google', r['segments.date'],
-      String(r['segments.conversion_action_name'] || '(unnamed)'),
-      round2(conv), round2(val)
-    ]);
+  var agg = {};   // "date\u0001action" -> {date, action, conv, val, convT, valT}
+  function bucket(d, a) {
+    var k = d + '\u0001' + a;
+    return agg[k] || (agg[k] = { date: d, action: a, conv: 0, val: 0, convT: 0, valT: 0 });
   }
+  // 1) interaction (click) date — matches the Google Ads "Conversions" column
+  var q1 = 'SELECT segments.date, segments.conversion_action_name, metrics.conversions, metrics.conversions_value ' +
+           "FROM customer WHERE segments.date BETWEEN '" + s + "' AND '" + e + "' ORDER BY segments.date";
+  try {
+    var r1 = AdsApp.report(q1).rows();
+    while (r1.hasNext()) { var a1 = r1.next(); var b1 = bucket(String(a1['segments.date']), String(a1['segments.conversion_action_name'] || '(unnamed)'));
+      b1.conv += Number(a1['metrics.conversions']) || 0; b1.val += Number(a1['metrics.conversions_value']) || 0; }
+  } catch (err) { Logger.log('Conv (interaction date) query failed for "' + name + '": ' + err); }
+  // 2) conversion date — "Conversions (by conv. time)"
+  var q2 = 'SELECT segments.date, segments.conversion_action_name, metrics.conversions_by_conversion_date, metrics.conversions_value_by_conversion_date ' +
+           "FROM customer WHERE segments.date BETWEEN '" + s + "' AND '" + e + "' ORDER BY segments.date";
+  try {
+    var r2 = AdsApp.report(q2).rows();
+    while (r2.hasNext()) { var a2 = r2.next(); var b2 = bucket(String(a2['segments.date']), String(a2['segments.conversion_action_name'] || '(unnamed)'));
+      b2.convT += Number(a2['metrics.conversions_by_conversion_date']) || 0; b2.valT += Number(a2['metrics.conversions_value_by_conversion_date']) || 0; }
+  } catch (err2) { Logger.log('Conv (by conversion time) query failed for "' + name + '": ' + err2); }
+
+  Object.keys(agg).forEach(function (k) {
+    var b = agg[k];
+    if (!b.conv && !b.val && !b.convT && !b.valT) return;
+    out.push([client, name, cid, 'Google', b.date, b.action,
+              round2(b.conv), round2(b.val), round2(b.convT), round2(b.valT)]);
+  });
 }
 
 function writeDaily(rows) {
@@ -159,7 +173,7 @@ function writeDaily(rows) {
 }
 
 function writeConvDaily(rows) {
-  var header = ['Client', 'Account', 'AccountId', 'Platform', 'Date', 'Action', 'Conv', 'Value'];
+  var header = ['Client', 'Account', 'AccountId', 'Platform', 'Date', 'Action', 'Conv', 'Value', 'ConvT', 'ValueT'];
   pushTab('Daily_Google_Conv', header, rows, 5); // Date is column 5, keep as text
 }
 

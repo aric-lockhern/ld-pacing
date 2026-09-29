@@ -270,7 +270,10 @@ table.bd tr:last-child td{border-bottom:none;}
 .cp-title{font-weight:700;font-size:13px;color:var(--ink);}
 .cp-note{font-size:11.5px;color:var(--faint);}
 .cp-note.on{color:var(--accent);font-weight:600;}
-.cp-head .mini{margin-left:auto;}
+.cp-basis{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted);cursor:pointer;border:1px solid var(--line);border-radius:999px;padding:2px 9px;white-space:nowrap;}
+.cp-basis.on{border-color:var(--accent);color:var(--accent);font-weight:600;}
+.cp-basis input{margin:0;cursor:pointer;}
+.cp-head .mini{margin-left:8px;}
 .cp-sub{font-size:12px;color:var(--muted);margin:4px 0 10px;line-height:1.45;}
 .cp-list{max-height:230px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff;}
 .convopt{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:6px;cursor:pointer;font-size:12.5px;}
@@ -372,7 +375,7 @@ var ACTIVE_LABEL = 'active';
 /* ---- state ---- */
 var state = {
   accounts: [], budgets: {}, open: {}, dailyByClient: {},
-  convByClient: {}, convPrefs: {}, convLoaded: false,   // per-conversion-action data + each client's selected actions
+  convByClient: {}, convPrefs: {}, convBasis: {}, convLoaded: false,   // per-conversion-action data + each client's selected actions + attribution basis
   rawG: [], rawM: [], rawDailyG: [], rawDailyM: [], groups: {}, hidden: {}, types: {}, managers: {}, discipline: {}, team: [], slackUsers: [], dismiss: {}, selected: {},
   changelog: null, changelogLoading: false,
   view: 'pacing', showAll: false, showHidden: false, filterIssues: false, filterWins: false, detailDays: 30, slackFor: null,
@@ -663,17 +666,22 @@ function toggleConvAction(client, action, on){
   if(on){ if(i<0) cur.push(action); } else if(i>=0){ cur.splice(i,1); }
   if(cur.length) state.convPrefs[client]=cur; else delete state.convPrefs[client];
   render();                          // Conversions / CPA / ROAS follow immediately
-  saveConvPrefs(client, cur);
+  saveConvPrefs(client);
 }
 function clearConvPrefs(client){
-  delete state.convPrefs[client]; render(); saveConvPrefs(client, []);
+  delete state.convPrefs[client]; render(); saveConvPrefs(client);
 }
-function saveConvPrefs(client, actions){
+function setConvBasis(client, on){
+  if(on) state.convBasis[client]='time'; else delete state.convBasis[client];
+  render(); saveConvPrefs(client);
+}
+function saveConvPrefs(client){
+  var actions=(state.convPrefs[client]||[]), basis=(state.convBasis[client]==='time'?'time':'');
   state.save='saving'; updateSaveInd();
   clearTimeout(convSaveTimers[client]);
   convSaveTimers[client]=setTimeout(function(){
     if(WEBAPP_URL.indexOf('http')!==0){ state.save='idle'; updateSaveInd(); return; }
-    jsonp({ action:'setConvPrefs', client:client, actions:actions.join('\n') })
+    jsonp({ action:'setConvPrefs', client:client, actions:actions.join('\n'), basis:basis })
       .then(function(r){ if(r&&r.ok&&!r.service){ state.save='saved'; updateSaveInd(); setTimeout(function(){ state.save='idle'; updateSaveInd(); },1400); } else { state.save='idle'; updateSaveInd(); } })
       .catch(function(){ state.save='idle'; updateSaveInd(); });
   }, 500);
@@ -830,30 +838,34 @@ function convToState(res){
       var client=(state.groups[id] || r.Client || r.Account || '').trim();   // honor in-tool grouping, like effClient
       var action=String(r.Action||'').trim();
       if(!client || !action) return;
-      var dstr=normDate(r.Date), ym=dstr.slice(0,7), conv=toNum(r.Conv), val=toNum(r.Value);
+      var dstr=normDate(r.Date), ym=dstr.slice(0,7), conv=toNum(r.Conv), val=toNum(r.Value), convT=toNum(r.ConvT), valT=toNum(r.ValueT);
       var c=byClient[client] || (byClient[client]={actions:{},byMA:{},byDA:{}});
-      var tot=c.actions[action] || (c.actions[action]={conv:0,val:0}); tot.conv+=conv; tot.val+=val;
+      var tot=c.actions[action] || (c.actions[action]={conv:0,val:0,convT:0,valT:0}); tot.conv+=conv; tot.val+=val; tot.convT+=convT; tot.valT+=valT;
       var m=c.byMA[ym] || (c.byMA[ym]={});
-      var ma=m[action] || (m[action]={conv:0,val:0}); ma.conv+=conv; ma.val+=val;
+      var ma=m[action] || (m[action]={conv:0,val:0,convT:0,valT:0}); ma.conv+=conv; ma.val+=val; ma.convT+=convT; ma.valT+=valT;
       var dm=c.byDA[dstr] || (c.byDA[dstr]={});
-      var da=dm[action] || (dm[action]={conv:0,val:0}); da.conv+=conv; da.val+=val;
+      var da=dm[action] || (dm[action]={conv:0,val:0,convT:0,valT:0}); da.conv+=conv; da.val+=val; da.convT+=convT; da.valT+=valT;
     });
   }
   ingest(res.convActions && res.convActions.Google);
   ingest(res.convActions && res.convActions.Microsoft);
   state.convByClient=byClient;
-  var prefs={};
+  var prefs={}, basis={};
   (res.convPrefs||[]).forEach(function(r){
     var client=String(r.Client||'').trim(); if(!client) return;
     var acts=String(r.Actions||'').split('\n').map(function(s){return s.trim();}).filter(Boolean);
     if(acts.length) prefs[client]=acts;
+    if(String(r.Basis||'').trim().toLowerCase()==='time') basis[client]='time';
   });
-  state.convPrefs=prefs; state.convLoaded=true;
+  state.convPrefs=prefs; state.convBasis=basis; state.convLoaded=true;
 }
-// Actions a client records, most conversions first (drives the picker list).
+function convTimeBasis(client){ return state.convBasis[client]==='time'; }   // true = by conversion time
+// Actions a client records, most conversions first (drives the picker list). The
+// count shown follows the client's chosen basis (interaction vs conversion time).
 function convActionsFor(client){
   var c=state.convByClient[client]; if(!c) return [];
-  return Object.keys(c.actions).map(function(a){ return {action:a, conv:c.actions[a].conv, val:c.actions[a].val}; })
+  var t=convTimeBasis(client);
+  return Object.keys(c.actions).map(function(a){ var x=c.actions[a]; return {action:a, conv:(t?x.convT:x.conv), val:(t?x.valT:x.val)}; })
     .sort(function(x,y){ return y.conv-x.conv; });
 }
 function hasConvSelection(client){ var s=state.convPrefs[client]; return !!(s && s.length); }
@@ -861,8 +873,8 @@ function hasConvSelection(client){ var s=state.convPrefs[client]; return !!(s &&
 function selectedConvFor(client, ym){
   var c=state.convByClient[client]; if(!c) return null;
   var sel=state.convPrefs[client]; if(!sel || !sel.length) return null;
-  var m=c.byMA[ym]||{}, o={conv:0,val:0};
-  sel.forEach(function(a){ if(m[a]){ o.conv+=m[a].conv; o.val+=m[a].val; } });
+  var t=convTimeBasis(client), m=c.byMA[ym]||{}, o={conv:0,val:0};
+  sel.forEach(function(a){ if(m[a]){ o.conv+=(t?m[a].convT:m[a].conv); o.val+=(t?m[a].valT:m[a].val); } });
   return o;
 }
 // date -> {conv,val} summed over the selected actions (for the daily detail);
@@ -870,10 +882,10 @@ function selectedConvFor(client, ym){
 function selectedConvByDate(client){
   var c=state.convByClient[client]; if(!c) return null;
   var sel=state.convPrefs[client]; if(!sel || !sel.length) return null;
-  var out={};
+  var t=convTimeBasis(client), out={};
   Object.keys(c.byDA).forEach(function(dt){
     var m=c.byDA[dt], o={conv:0,val:0};
-    sel.forEach(function(a){ if(m[a]){ o.conv+=m[a].conv; o.val+=m[a].val; } });
+    sel.forEach(function(a){ if(m[a]){ o.conv+=(t?m[a].convT:m[a].conv); o.val+=(t?m[a].valT:m[a].val); } });
     out[dt]=o;
   });
   return out;
@@ -1472,19 +1484,20 @@ function convPickerHTML(a){
   var list=convActionsFor(a.client);
   if(!list.length) return '';   // no per-action data for this client (e.g. Bing-only, or feed not updated yet)
   var sel=state.convPrefs[a.client]||[], selSet={}; sel.forEach(function(x){ selSet[x]=true; });
-  var on=sel.length>0;
+  var on=sel.length>0, byTime=convTimeBasis(a.client);
   var opts=list.map(function(it){
     var checked=!!selSet[it.action];
     return '<label class="convopt'+(checked?' on':'')+'"><input type="checkbox" class="conv-act" data-client="'+esc(a.client)+'" data-action="'+esc(it.action)+'"'+(checked?' checked':'')+'>'
       + '<span class="convname" title="'+esc(it.action)+'">'+esc(it.action)+'</span>'
-      + '<span class="convcount" title="conversions over the loaded window">'+intf(it.conv)+'</span></label>';
+      + '<span class="convcount" title="conversions over the loaded window'+(byTime?' — by conversion time':'')+'">'+intf(it.conv)+'</span></label>';
   }).join('');
   return '<div class="convpicker">'
     + '<div class="cp-head"><span class="cp-title">Conversions counted</span>'
       + '<span class="cp-note'+(on?' on':'')+'">'+(on?('Counting '+sel.length+' selected action'+(sel.length===1?'':'s')):'Account default — all reported conversions')+'</span>'
+      + '<label class="cp-basis'+(byTime?' on':'')+'" title="By conversion time attributes each conversion to the day it actually happened, instead of the ad-click day. Steadier daily trends; Google only."><input type="checkbox" class="conv-basis" data-client="'+esc(a.client)+'"'+(byTime?' checked':'')+'>By conversion time</label>'
       + (on?'<button class="mini" data-act="conv-clear" data-client="'+esc(a.client)+'">Reset to default</button>':'')
       + '</div>'
-    + '<div class="cp-sub">Pick the conversion action(s) that count as this client’s <b>Conversions</b> / CPA'+(isEcomm(a)?' / ROAS':'')+' — e.g. Purchases only. Numbers are conversions over the loaded window; leave all unticked to keep the account default.</div>'
+    + '<div class="cp-sub">Pick the conversion action(s) that count as this client’s <b>Conversions</b> / CPA'+(isEcomm(a)?' / ROAS':'')+' — e.g. Purchases only. Numbers are conversions over the loaded window'+(byTime?' (by conversion time)':'')+'; leave all unticked to keep the account default.</div>'
     + '<div class="cp-list">'+opts+'</div></div>';
 }
 
@@ -2071,6 +2084,8 @@ document.addEventListener('change', function(e){
     render();
   } else if(e.target.classList.contains('conv-act')){
     toggleConvAction(e.target.getAttribute('data-client'), e.target.getAttribute('data-action'), e.target.checked);
+  } else if(e.target.classList.contains('conv-basis')){
+    setConvBasis(e.target.getAttribute('data-client'), e.target.checked);
   }
 });
 document.addEventListener('input', function(e){
