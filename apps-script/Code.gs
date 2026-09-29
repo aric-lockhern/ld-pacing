@@ -35,7 +35,7 @@ var GROUP_TAB      = 'Groups';
 var GROUP_HEADER   = ['AccountId', 'Platform', 'Account', 'Group', 'Hidden', 'Type', 'Manager', 'Updated', 'Discipline'];
 var DISMISS_TAB    = 'Dismissals';
 var CONVPREFS_TAB    = 'ConvPrefs';                        // per-client selected conversion actions (Search)
-var CONVPREFS_HEADER = ['Client', 'Actions', 'Updated'];   // Actions = comma-separated action names
+var CONVPREFS_HEADER = ['Client', 'Actions', 'Updated', 'Basis'];   // Actions = newline-separated names; Basis = '' (interaction date) | 'time' (by conversion time)
 var DISMISS_HEADER = ['Client', 'Until', 'Updated'];
 var CHANGELOG_TAB    = 'Changelog';
 var CHANGELOG_HEADER = ['When', 'By', 'Area', 'Action', 'Target', 'Detail'];
@@ -380,16 +380,18 @@ function setConvPrefs(p) {
   if (!client) throw new Error('missing client');
   var actions = String(p.actions || '').split('\n').map(function (s) { return s.trim(); })
                 .filter(function (s) { return s.length; }).join('\n');
+  var basis = (String(p.basis || '').trim().toLowerCase() === 'time') ? 'time' : '';   // '' = interaction date
   var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   var sheet = ss.getSheetByName(CONVPREFS_TAB) || ss.insertSheet(CONVPREFS_TAB);
   ensureHeader(sheet, CONVPREFS_HEADER);
   var values = sheet.getDataRange().getValues(), target = -1;
   for (var i = 1; i < values.length; i++) { if (String(values[i][0]).trim() === client) { target = i + 1; break; } }
-  var row = [client, actions, new Date().toISOString()];
+  var row = [client, actions, new Date().toISOString(), basis];
   if (target === -1) { sheet.appendRow(row); target = sheet.getLastRow(); }
   else sheet.getRange(target, 1, 1, row.length).setValues([row]);
   sheet.getRange(target, 2).setNumberFormat('@').setValue(actions);   // keep as text, no auto-format
-  logChange_(p.by, 'Search', 'Conversion actions', client, actions ? actions.replace(/\n/g, ', ') : '(all — default)');
+  logChange_(p.by, 'Search', 'Conversion actions', client,
+             (actions ? actions.replace(/\n/g, ', ') : '(all — default)') + (basis === 'time' ? ' · by conversion time' : ''));
   return { ok: true };
 }
 
