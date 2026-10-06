@@ -1956,6 +1956,14 @@ function detailHTML(a,d){
   var cumChart=chartSVG({xMin:0,xMax:n-1,yMax:niceMax(Math.max(last.cum,last.expected,1)),yFmt:moneyY,xTicks:xTicks,
     series:[{pts:px('cum'),color:'#4A5568'},{pts:px('expected'),color:'#3A4FBF',dash:true}]});
   var cpaChart=chartSVG({xMin:0,xMax:n-1,yMax:maxOf('cpa'),yFmt:moneyY,xTicks:xTicks,series:[{pts:pxf('cpa'),color:'#42506A'}]});
+  // Conversions per day — reflects the client's picked action(s) + basis (or the
+  // account's headline conversions when nothing is picked). Key view for lead-gen.
+  var convChart=chartSVG({xMin:0,xMax:n-1,yMax:maxOf('conv'),yFmt:function(v){return intf(v);},xTicks:xTicks,series:[{pts:px('conv'),color:'#4F46C9'}]});
+  var totConv=rows.reduce(function(s,r){return s+(r.conv||0);},0);
+  var convSel2=state.convPrefs[a.client]||[];
+  var convNote = convSel2.length
+    ? ('Counting '+convSel2.length+' selected action'+(convSel2.length===1?'':'s')+(convTimeBasis(a.client)?' · by conversion time':''))
+    : 'All reported conversions';
 
   var charts=''
     + '<div class="chartcard"><div class="ch-title">Daily spend vs target</div>'+dailyChart
@@ -1964,6 +1972,7 @@ function detailHTML(a,d){
       + (avgTarget>0?('<div class="chnote">Avg '+money(avgSpend)+'/day vs '+money(avgTarget)+' target</div>'):'<div class="chnote">Set a budget to see the daily target</div>')
       + '</div>'
     + '<div class="chartcard"><div class="ch-title">Cumulative spend — actual vs expected</div>'+cumChart+'<div class="legend"><span class="lg"><i style="background:#4A5568"></i>Actual</span><span class="lg"><i style="background:#3A4FBF"></i>Expected</span></div></div>'
+    + '<div class="chartcard"><div class="ch-title">Conversions (daily)</div>'+convChart+'<div class="chnote">'+intf(totConv)+' total · avg '+intf(n>0?totConv/n:0)+'/day · '+esc(convNote)+'</div></div>'
     + '<div class="chartcard"><div class="ch-title">Cost / conv (daily)</div>'+cpaChart+'</div>';
   if(hasRev){
     var revChart=chartSVG({xMin:0,xMax:n-1,yMax:maxOf('rev'),yFmt:moneyY,xTicks:xTicks,series:[{pts:px('rev'),color:'#1B8A5A'}]});
