@@ -146,9 +146,10 @@ FB.load = function(force){
   if(!force && state.fbSource==='live') return;
   if(WEBAPP_URL.indexOf('http')!==0){ state.fbSource='sample'; state.fbRaw=[]; FB.rebuild(); render(); return; }
   state.fbSource='loading'; render();
-  // The FB sheet is large; the gateway caches the heavy read, but a cold read
-  // can take a while — allow 60s, and force=refresh bypasses the gateway cache.
-  jsonp({ action:'fbData', fresh: force?'1':'' }, 60000).then(function(res){
+  // The FB sheet is large; the fast path (Netlify) serves it instantly. A normal
+  // load uses it; Refresh (force) goes to Apps Script for the freshest read.
+  var read = (force && typeof jsonpRead==='function') ? jsonpRead : (typeof fastRead==='function' ? fastRead : jsonp);
+  read({ action:'fbData', fresh: force?'1':'' }, 60000).then(function(res){
     if(!res || !res.ok) throw new Error(res && res.error || 'bad response');
     state.fbRaw = res.rows || [];
     state.fbAcctList = res.accounts || [];       // full roster (active + inactive) for the manage panel
@@ -773,7 +774,9 @@ function fbScheduleRename(acct, name){
 // without flipping the whole view to the boot/loading screen.
 function fbReloadAccounts(){
   if(WEBAPP_URL.indexOf('http')!==0){ state.fbSave='idle'; render(); return; }
-  jsonp({ action:'fbData', fresh:'1' }, 60000).then(function(res){
+  // Post-write reload → Apps Script (authoritative), so a just-changed account
+  // flag is reflected even before the fast path republishes.
+  (typeof jsonpRead==='function'?jsonpRead:jsonp)({ action:'fbData', fresh:'1' }, 60000).then(function(res){
     if(res && res.ok){ state.fbRaw=res.rows||[]; state.fbAcctList=res.accounts||[]; state.fbBudgets=fbBudgetsToMap(res.budgets||[]); FB.rebuild(); }
     state.fbSave='saved'; render(); fbUpdateMacSaveInd();
     setTimeout(function(){ if(state.fbSave==='saved'){ state.fbSave='idle'; fbUpdateSaveInd(); fbUpdateMacSaveInd(); } },1400);
