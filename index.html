@@ -273,6 +273,7 @@ table.bd tr:last-child td{border-bottom:none;}
 .cp-basis{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted);cursor:pointer;border:1px solid var(--line);border-radius:999px;padding:2px 9px;white-space:nowrap;}
 .cp-basis.on{border-color:var(--accent);color:var(--accent);font-weight:600;}
 .cp-basis input{margin:0;cursor:pointer;}
+.cp-timewarn{font-size:11px;color:var(--over,#C13B2E);font-weight:600;}
 .cp-head .mini{margin-left:8px;}
 .cp-sub{font-size:12px;color:var(--muted);margin:4px 0 10px;line-height:1.45;}
 .cp-list{max-height:230px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff;}
@@ -913,7 +914,17 @@ function convToState(res){
   });
   state.convPrefs=prefs; state.convBasis=basis; state.convLoaded=true;
 }
-function convTimeBasis(client){ return state.convBasis[client]==='time'; }   // true = by conversion time
+// Does this client actually have by-conversion-time data? (Google only, and only
+// once the Ads script's conversion-date query returns values.) Guards against the
+// "by conversion time" toggle showing misleading zeros when ConvT isn't populated.
+function hasConvTime(client){
+  var c=state.convByClient[client]; if(!c) return false;
+  var a=c.actions; for(var k in a){ if(a.hasOwnProperty(k) && ((a[k].convT||0)>0 || (a[k].valT||0)>0)) return true; }
+  return false;
+}
+// true = show conversions by conversion time. Falls back to click date when the
+// client has no conversion-time data yet, so numbers never read as 0.
+function convTimeBasis(client){ return state.convBasis[client]==='time' && hasConvTime(client); }
 // Actions a client records, most conversions first (drives the picker list). The
 // count shown follows the client's chosen basis (interaction vs conversion time).
 function convActionsFor(client){
@@ -1538,7 +1549,7 @@ function convPickerHTML(a){
   var list=convActionsFor(a.client);
   if(!list.length) return '';   // no per-action data for this client (e.g. Bing-only, or feed not updated yet)
   var sel=state.convPrefs[a.client]||[], selSet={}; sel.forEach(function(x){ selSet[x]=true; });
-  var on=sel.length>0, byTime=convTimeBasis(a.client);
+  var on=sel.length>0, wantTime=state.convBasis[a.client]==='time', byTime=convTimeBasis(a.client);
   var opts=list.map(function(it){
     var checked=!!selSet[it.action];
     return '<label class="convopt'+(checked?' on':'')+'"><input type="checkbox" class="conv-act" data-client="'+esc(a.client)+'" data-action="'+esc(it.action)+'"'+(checked?' checked':'')+'>'
@@ -1548,7 +1559,8 @@ function convPickerHTML(a){
   return '<div class="convpicker">'
     + '<div class="cp-head"><span class="cp-title">Conversions counted</span>'
       + '<span class="cp-note'+(on?' on':'')+'">'+(on?('Counting '+sel.length+' selected action'+(sel.length===1?'':'s')):'Account default — all reported conversions')+'</span>'
-      + '<label class="cp-basis'+(byTime?' on':'')+'" title="By conversion time attributes each conversion to the day it actually happened, instead of the ad-click day. Steadier daily trends; Google only."><input type="checkbox" class="conv-basis" data-client="'+esc(a.client)+'"'+(byTime?' checked':'')+'>By conversion time</label>'
+      + '<label class="cp-basis'+(wantTime?' on':'')+'" title="By conversion time attributes each conversion to the day it actually happened, instead of the ad-click day. Steadier daily trends; Google only."><input type="checkbox" class="conv-basis" data-client="'+esc(a.client)+'"'+(wantTime?' checked':'')+'>By conversion time</label>'
+      + (wantTime && !byTime ? '<span class="cp-timewarn" title="The Daily_Google_Conv tab has no conversion-time values yet. Re-run the Google Ads script; conversion time is Google-only.">⚠ no conversion-time data yet — showing click date</span>' : '')
       + (on?'<button class="mini" data-act="conv-clear" data-client="'+esc(a.client)+'">Reset to default</button>':'')
       + '</div>'
     + '<div class="cp-sub">Pick the conversion action(s) that count as this client’s <b>Conversions</b> / CPA'+(isEcomm(a)?' / ROAS':'')+' — e.g. Purchases only. Numbers are conversions over the loaded window'+(byTime?' (by conversion time)':'')+'; leave all unticked to keep the account default.</div>'
