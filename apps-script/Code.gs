@@ -28,6 +28,9 @@
 
 var SPREADSHEET_ID = '19AOeg1RK0O09hJQpU1ItDRnYBEuNg2aGnyWzpgv_Sqk';
 var SHARED_SECRET  = 'lockhern-pacing'; // change this; match it in the Bing script and index.html
+// Fast loading: the publisher (Publish.gs) POSTs snapshots to <SITE_URL>/api/ingest
+// (the Netlify Function). Defaults to the live site; a Script Property SITE_URL overrides.
+var SITE_URL       = 'https://pacing.lockherndigital.com';
 var FEED_TABS      = ['Google_Feed', 'Microsoft_Feed'];
 var BUDGET_TAB     = 'Budgets';
 var BUDGET_HEADER  = ['Client', 'Month', 'Mode', 'Amount', 'Updated'];
@@ -101,10 +104,7 @@ function doGet(e) {
   try {
     if (p.action === 'data') {
       requireSecret(p);
-      var budgets = readTab(BUDGET_TAB).map(function (r) { r.Month = normMonth(r.Month); return r; });
-      out = { ok: true, feeds: readFeeds(), budgets: budgets, groups: readTab(GROUP_TAB), dismissals: readTab(DISMISS_TAB), team: readTab('Team'),
-              remindersDismissed: readTab(REMIND_TAB).map(function (r) { return normMonth(r.Month); }).filter(Boolean),
-              dailies: { Daily_Google: readTab('Daily_Google').concat(readTab('Daily_Google_WL')), Daily_Microsoft: readTab('Daily_Microsoft').concat(readTab('Daily_Microsoft_WL')) } };
+      out = buildDataResponse_();
     } else if (p.action === 'setBudget') {
       out = setBudget(p);
     } else if (p.action === 'setGroup') {
@@ -910,6 +910,14 @@ function setFbLeads(p) {
 }
 
 /* ---- reads ---- */
+// The full `data` response — shared by doGet(action=data) and the fast-loading
+// publisher (Publish.gs), so the live read and the published snapshot can't drift.
+function buildDataResponse_() {
+  var budgets = readTab(BUDGET_TAB).map(function (r) { r.Month = normMonth(r.Month); return r; });
+  return { ok: true, feeds: readFeeds(), budgets: budgets, groups: readTab(GROUP_TAB), dismissals: readTab(DISMISS_TAB), team: readTab('Team'),
+           remindersDismissed: readTab(REMIND_TAB).map(function (r) { return normMonth(r.Month); }).filter(Boolean),
+           dailies: { Daily_Google: readTab('Daily_Google').concat(readTab('Daily_Google_WL')), Daily_Microsoft: readTab('Daily_Microsoft').concat(readTab('Daily_Microsoft_WL')) } };
+}
 function readFeeds() {
   // Merge the MCC feed with an optional white-label feed written to *_WL tabs.
   // readTab returns [] for a missing tab, so this is a no-op until _WL exists.

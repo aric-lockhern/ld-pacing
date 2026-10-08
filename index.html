@@ -354,6 +354,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
   <div style="font-size:12.5px;color:#64717F;margin-top:5px;">Loading your accounts… this can take a moment.</div>
 </div>
 <div class="wrap" id="app"></div>
+<div id="slow-note" hidden style="position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:9998;background:#1F2937;color:#fff;font:13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;padding:10px 15px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.28);max-width:92vw;text-align:center;"></div>
 
 <script>
 /* ============================================================
@@ -424,14 +425,67 @@ function jsonp(params, timeoutMs){
   return jsonpScript(params, timeoutMs).catch(function(){ return jsonpFetch(params, timeoutMs); });
 }
 
+/* ---- fast read path ----
+   Netlify Blobs, served from this site's own /api (apps-script/Publish.gs publishes
+   there every few minutes and right after each write), answer the big reads in well
+   under a second — dodging Google's slow, flaky web-app front end (measured Oct 2026:
+   script 0 ms, requests 3-50 s, some 404s). Only data/fbData/convData are served fast;
+   anything the fast path can't vouch for (nothing published yet, a secret it can't
+   verify, or an HTML/404 because no function is deployed) falls through to Apps Script,
+   which stays the authority. Writes always go to Apps Script. ---- */
+var FAST = (/^https?:$/.test(location.protocol) ? location.origin + '/api' : '');
+var FAST_OFF = false, FAST_WHY = '';
+var FAST_ACTIONS = { data:1, fbData:1, convData:1 };
+var API_TRIES = 4;
+function slowNote(on){
+  var el=document.getElementById('slow-note'); if(!el) return;
+  if(!on){ el.hidden=true; return; }
+  var why = FAST_WHY==='nothing published yet' ? ' Fast loading isn’t set up yet (Sheet menu → Fast loading: set up).'
+          : FAST_WHY==='no function' ? ' Fast loading isn’t answering on this site (check the latest Netlify deploy).'
+          : FAST_WHY==='not verified here' ? ' Fast loading couldn’t verify this browser.'
+          : (FAST_WHY && FAST_WHY.indexOf('not published')>=0) ? ' That data hasn’t reached fast loading yet; the Sheet sends it within a few minutes.' : '';
+  el.textContent = 'Still loading — Google’s servers are slow right now. The page keeps trying.'+why;
+  el.hidden=false;
+}
+// Apps Script read with retries + the slow note. Reads are idempotent, so retrying is safe.
+function jsonpRead(params, timeoutMs){
+  return new Promise(function(resolve, reject){
+    var slow=setTimeout(function(){ slowNote(true); }, 8000);
+    (function attempt(n){
+      jsonp(params, timeoutMs).then(function(res){ clearTimeout(slow); slowNote(false); resolve(res); })
+        .catch(function(err){
+          if(n < API_TRIES){ slowNote(true); setTimeout(function(){ attempt(n+1); }, 600*n); return; }
+          clearTimeout(slow); slowNote(false); reject(err);
+        });
+    })(1);
+  });
+}
+// Fast path first for the big reads; Apps Script (with retries) otherwise or on fallback.
+function fastRead(params, timeoutMs){
+  if(!FAST || FAST_OFF || !FAST_ACTIONS[params.action]) return jsonpRead(params, timeoutMs);
+  var q=Object.assign({}, params, { secret: SECRET });
+  var qs=Object.keys(q).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(q[k]); }).join('&');
+  return fetch(FAST+'?'+qs, { cache:'no-store' })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){
+      if(j && j.ok && !j.fallback){ slowNote(false); return j; }   // fast hit → the full response, used as-is
+      if(!j){ FAST_OFF=true; FAST_WHY='no function'; } else FAST_WHY=String(j.error||'');
+      return jsonpRead(params, timeoutMs);
+    })
+    .catch(function(){ FAST_OFF=true; FAST_WHY='no function'; return jsonpRead(params, timeoutMs); });
+}
+
 /* ---- boot loader (the full-screen splash before the first data lands) ---- */
 function hideBoot(){ var el=document.getElementById('boot'); if(!el) return; el.style.opacity='0'; el.style.pointerEvents='none'; setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); }, 380); }
 
 /* ---- load ---- */
-function loadData(){
+function loadData(slow){
   if(WEBAPP_URL.indexOf('http')!==0){ state.source='sample'; state.accounts=SAMPLE; render(); hideBoot(); return; }
   state.source='loading'; render();
-  jsonp({ action:'data' }).then(function(res){
+  // Explicit Refresh goes straight to Apps Script (the authority) for the freshest
+  // numbers; a normal load uses the fast path and falls back automatically.
+  var read = slow ? jsonpRead : fastRead;
+  read({ action:'data' }).then(function(res){
     if(!res || !res.ok) throw new Error(res && res.error || 'bad response');
     var feeds = res.feeds || {}, dl = res.dailies || {};
     state.rawG = feeds.Google_Feed||[]; state.rawM = feeds.Microsoft_Feed||[];
@@ -448,7 +502,7 @@ function loadData(){
     if(!state._slackFetched){ state._slackFetched=true; jsonp({action:'slackUsers'}).then(function(r){ if(r&&r.ok&&r.users){ state.slackUsers=r.users; render(); } }).catch(function(){}); }
     // Per-conversion-action data is potentially large, so it loads separately
     // (after the main table is up) rather than blocking the initial render.
-    jsonp({action:'convData'}, 60000).then(function(r){ if(r&&r.ok){ convToState(r); render(); } }).catch(function(){});
+    read({action:'convData'}, 60000).then(function(r){ if(r&&r.ok){ convToState(r); render(); } }).catch(function(){});
   }).catch(function(err){
     // The request reached us but FAILED (blocked by an extension, offline,
     // gateway error/redeploy needed, bad secret). Show a real error — don't
@@ -2033,7 +2087,7 @@ document.addEventListener('click', function(e){
   if(act==='prev'){ state.viewMonth=shiftKey(state.viewMonth,-1); render(); }
   else if(act==='next'){ state.viewMonth=shiftKey(state.viewMonth,1); render(); }
   else if(act==='today'){ state.viewMonth=state.liveKey; render(); }
-  else if(act==='refresh'){ loadData(); }
+  else if(act==='refresh'){ loadData(true); }
   else if(act==='tab-pacing'){ state.view='pacing'; render(); }
   else if(act==='tab-facebook'){ state.view='facebook'; render(); if(window.FB) FB.load(); }
   else if(act==='tab-settings'){ state.view='settings'; render(); if(state.changelog==null && !state.changelogLoading) loadChangelog(); }

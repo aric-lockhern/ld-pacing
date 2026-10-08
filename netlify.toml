@@ -1,10 +1,21 @@
 # Netlify configuration for the Lockhern Account Pacing dashboard.
-# This is a static single-page app (one index.html) — there is no build
-# step, so Netlify just publishes the repo root as-is.
+# A static single-page app (index.html + facebook.js) PLUS a serverless read API
+# (netlify/functions/api.mjs) that serves the fast read path from Netlify Blobs.
+# `npm test` runs the unit/security tests first, so a commit that fails them never
+# publishes. There is no front-end build step; the repo root is published as-is.
 
 [build]
   publish = "."
-  command = ""
+  command = "npm test"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  # netlify/functions/api.mjs: the fast read API at /api and /api/ingest (see
+  # apps-script/Publish.gs). Needs @netlify/blobs, bundled by esbuild.
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
 
 # index.html must never be stale: the whole team reads live numbers through
 # it, and gateway/URL changes need to take effect on the next load.

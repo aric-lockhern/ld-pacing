@@ -116,3 +116,64 @@ and **you must redeploy the gateway as a new version** after editing `Code.gs`.
 `DEFAULT_WEBAPP_URL` and `DEFAULT_SECRET` at the top of `index.html` point the
 front-end at the gateway for the whole team. The in-app **Settings** tab can
 override them per-browser, but the committed defaults are what everyone gets.
+
+## Fast read path (fast loading)
+
+Google's Apps Script **web-app front end** is the slow, flaky part — the script
+runs in milliseconds, but requests take 3–50 s and sometimes come back 404 from
+`script.googleusercontent.com`. So **reads no longer depend on it.** The Sheet and
+Apps Script stay the source of truth and the only writer; the page just reads from
+a copy served on its own domain.
+
+```
+Apps Script (Publish.gs)  ──gzipped POST──▶  <site>/api/ingest  ──▶  Netlify Blobs
+  every 5 min + after each write                (netlify/functions/api.mjs)
+                                                        ▲
+  index.html  ──GET <site>/api?action=…──────────────── ┘   (fast, <1 s)
+              └─ on fallback/404/network → Apps Script (JSONP), the authority
+```
+
+- **Publisher** — `apps-script/Publish.gs` builds the three payloads the page loads
+  every visit (`data`, `fb`, `conv`) from the **same functions `doGet` uses**
+  (`buildDataResponse_`, `fbData`, `convData`), gzips each, and POSTs the ones whose
+  content changed to `<SITE_URL>/api/ingest` with `Authorization: Bearer
+  <INGEST_SECRET>`. It also posts a tiny `index` holding only a **SHA-256 of the
+  shared secret** (never the secret). A 5-minute time trigger runs it; every tool
+  write republishes the affected payload right away (`publishSoon_`).
+- **Read API** — `netlify/functions/api.mjs` (logic in `netlify/lib/fastapi.mjs`)
+  serves `<site>/api?action=data|fbData|convData` from Netlify Blobs, taking the
+  **same parameters** as the Apps Script API, so the page only changes its base URL.
+  It verifies the caller by hashing the `secret` against the published index
+  (same check as `requireSecret`), and serves the stored payload **still gzipped**
+  (`Content-Encoding: gzip`), so multi-MB JSON is a couple hundred KB over the wire.
+  `/api?action=ping` says whether anything is published, how many accounts, and when.
+- **Page** — `fastRead()` tries `location.origin + '/api'` first for `data`/`fbData`/
+  `convData`; a `{fallback:true}`, HTML/404, or network answer falls through to the
+  Apps Script JSONP call (`jsonpRead`, which **retries up to 4×** on 404/429/5xx/network
+  and shows a "Google is slow" note after 8 s). A missing function turns the fast path
+  off for the visit. **Refresh** and post-write reloads go straight to Apps Script for
+  the freshest numbers. Writes always go to Apps Script.
+- **Access is unchanged.** One shared team secret, no per-client scoping — the fast
+  path shows exactly what the Apps Script read showed, to exactly the same people.
+- **Anything it can't positively verify** (nothing published, a secret it can't match,
+  an action it doesn't serve like `slackUsers`/`changelog`) answers `{fallback:true}`
+  and the page asks Apps Script. Tests: `npm test` (`tests/fastapi.test.mjs`) runs the
+  real publisher into the real function and asserts the same answers, plus the security
+  cases (bad/missing/short ingest secret, wrong/absent read secret, nothing published).
+- **Known harmless difference:** the fast path can be up to ~5 minutes behind for a
+  *passive* viewer (a write republishes within seconds for the person who made it; the
+  5-minute cycle covers hand-edits and the hourly feed). **Refresh** always bypasses it.
+
+### One-time setup
+1. In the Sheet: **Lockhern Pacing → Fast loading: set up** (creates `INGEST_SECRET`,
+   installs the 5-minute trigger, test-sends, and shows the secret to copy).
+2. In Netlify: **Site configuration → Environment variables** → add `INGEST_SECRET`
+   with that value.
+3. **Deploys → Trigger deploy** (so the function picks up the env var).
+4. Run **Fast loading: set up** again — it should now report "Fast loading is on."
+
+`SITE_URL` in `Code.gs` (default `https://pacing.lockherndigital.com`) is where the
+publisher POSTs; a Script Property `SITE_URL` overrides it. The gateway
+(`Code.gs` + `Publish.gs`) auto-deploys from `main` via the clasp GitHub Action, and
+Netlify builds the function on push (its build runs `npm test` first, so a commit that
+fails the tests never publishes).
