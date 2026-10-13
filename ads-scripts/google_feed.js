@@ -122,18 +122,15 @@ function collectDaily(client, name, cid, out) {
 
 /**
  * Per conversion-ACTION daily metrics (Purchases, Add to cart, Begin checkout, …),
- * one row per (day, action) at the account level, in TWO attribution bases:
- *   Conv / Value   = metrics.conversions        — by interaction (click) date.
- *                    Matches the Google Ads "Conversions" / "Conv. value" columns
- *                    and sums to the account's headline Conversions.
- *   ConvT / ValueT = metrics.all_conversions_by_conversion_date — by the date the
- *                    conversion actually happened ("by conv. time"). Uses the
- *                    all-conversions family because the counting by-conversion-date
- *                    metric doesn't segment by conversion action.
+ * one row per (day, action) at the account level, mirroring the Google Ads
+ * conversion-actions table. Both columns are ALL conversions, in two time bases:
+ *   Conv / Value   = metrics.all_conversions — "All conv." by interaction (click)
+ *                    date. Every action has a value (even non-counting ones).
+ *   ConvT / ValueT = metrics.all_conversions_by_conversion_date — "All conv.
+ *                    (by conv. time)", by the date the conversion happened.
  * The tool lets each client flip between the two. Both come from separate queries
  * because Google buckets segments.date differently for the two metric families.
- * (ConvT is the "all conversions" basis, so it can read a little higher than the
- * counting Conv column for the same action — the tool labels the toggle.)
+ * Both are "all conversions", so the two time bases are directly comparable.
  * Additive: does not affect the Google_Feed / Daily_Google numbers.
  */
 function collectConvActions(client, name, cid, out) {
@@ -145,13 +142,16 @@ function collectConvActions(client, name, cid, out) {
     var k = d + '\u0001' + a;
     return agg[k] || (agg[k] = { date: d, action: a, conv: 0, val: 0, convT: 0, valT: 0 });
   }
-  // 1) interaction (click) date — matches the Google Ads "Conversions" column
-  var q1 = 'SELECT segments.date, segments.conversion_action_name, metrics.conversions, metrics.conversions_value ' +
+  // 1) interaction (click) date — ALL conversions per action, matching the Google Ads
+  //    conversion-actions table ("All conv."). Uses all_conversions (not the counting
+  //    "Conversions" metric) so EVERY action has a value — including ones that aren't
+  //    set to count — and so both columns here share the same basis as the by-time one.
+  var q1 = 'SELECT segments.date, segments.conversion_action_name, metrics.all_conversions, metrics.all_conversions_value ' +
            "FROM customer WHERE segments.date BETWEEN '" + s + "' AND '" + e + "' ORDER BY segments.date";
   try {
     var r1 = AdsApp.report(q1).rows();
     while (r1.hasNext()) { var a1 = r1.next(); var b1 = bucket(String(a1['segments.date']), String(a1['segments.conversion_action_name'] || '(unnamed)'));
-      b1.conv += Number(a1['metrics.conversions']) || 0; b1.val += Number(a1['metrics.conversions_value']) || 0; }
+      b1.conv += Number(a1['metrics.all_conversions']) || 0; b1.val += Number(a1['metrics.all_conversions_value']) || 0; }
   } catch (err) { Logger.log('Conv (interaction date) query failed for "' + name + '": ' + err); }
   // 2) conversion date — per action, "All conv. (by conv. time)". The by-conversion-
   //    date metrics segment by conversion action ONLY on a customer query (the
