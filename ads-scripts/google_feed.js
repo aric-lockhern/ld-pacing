@@ -153,19 +153,29 @@ function collectConvActions(client, name, cid, out) {
     while (r1.hasNext()) { var a1 = r1.next(); var b1 = bucket(String(a1['segments.date']), String(a1['segments.conversion_action_name'] || '(unnamed)'));
       b1.conv += Number(a1['metrics.conversions']) || 0; b1.val += Number(a1['metrics.conversions_value']) || 0; }
   } catch (err) { Logger.log('Conv (interaction date) query failed for "' + name + '": ' + err); }
-  // 2) conversion date — "Conversions (by conv. time)". The COUNTING by-conversion-
-  //    date metric (conversions_by_conversion_date) does not segment by conversion
-  //    action (it silently returns nothing), so use the ALL-conversions by-conversion-
-  //    date metric, which segments by action the same way all_conversions does.
-  var q2 = 'SELECT segments.date, segments.conversion_action_name, metrics.all_conversions_by_conversion_date, metrics.all_conversions_value_by_conversion_date ' +
-           "FROM customer WHERE segments.date BETWEEN '" + s + "' AND '" + e + "' ORDER BY segments.date";
-  var tHits = 0;
-  try {
-    var r2 = AdsApp.report(q2).rows();
-    while (r2.hasNext()) { var a2 = r2.next(); var b2 = bucket(String(a2['segments.date']), String(a2['segments.conversion_action_name'] || '(unnamed)'));
-      var ct = Number(a2['metrics.all_conversions_by_conversion_date']) || 0, vt = Number(a2['metrics.all_conversions_value_by_conversion_date']) || 0;
-      b2.convT += ct; b2.valT += vt; if (ct || vt) tHits++; }
-  } catch (err2) { Logger.log('Conv (by conversion time) query failed for "' + name + '": ' + err2); }
+  // 2) conversion date — "All conv. (by conv. time)", per action. The by-conversion-
+  //    date metrics do NOT segment by conversion action on a customer query (Google
+  //    silently returns nothing), so query the conversion_action RESOURCE, where each
+  //    row IS an action and the metric is attributed to it. Fall back to the segmented
+  //    customer query in case a given account/Scripts version prefers it. Whichever
+  //    returns data wins; the per-account log says which (or none).
+  function pullConvTime(q, dateF, actF, mC, mV) {
+    var n = 0;
+    try {
+      var r = AdsApp.report(q).rows();
+      while (r.hasNext()) { var a = r.next(); var ct = Number(a[mC]) || 0, vt = Number(a[mV]) || 0; if (!ct && !vt) continue;
+        var b = bucket(String(a[dateF]), String(a[actF] || '(unnamed)')); b.convT += ct; b.valT += vt; n++; }
+    } catch (err2) { Logger.log('Conv-time query failed for "' + name + '" (' + q.slice(7, 70) + '…): ' + err2); }
+    return n;
+  }
+  var tHits = pullConvTime(
+    "SELECT conversion_action.name, segments.date, metrics.all_conversions_by_conversion_date, metrics.all_conversions_value_by_conversion_date " +
+      "FROM conversion_action WHERE segments.date BETWEEN '" + s + "' AND '" + e + "'",
+    'segments.date', 'conversion_action.name', 'metrics.all_conversions_by_conversion_date', 'metrics.all_conversions_value_by_conversion_date');
+  if (!tHits) tHits = pullConvTime(
+    "SELECT segments.date, segments.conversion_action_name, metrics.all_conversions_by_conversion_date, metrics.all_conversions_value_by_conversion_date " +
+      "FROM customer WHERE segments.date BETWEEN '" + s + "' AND '" + e + "'",
+    'segments.date', 'segments.conversion_action_name', 'metrics.all_conversions_by_conversion_date', 'metrics.all_conversions_value_by_conversion_date');
   Logger.log('[' + name + '] by-conversion-time rows with data: ' + tHits + (tHits ? '' : ' (none — conversion-time stays 0 for this account)'));
 
   Object.keys(agg).forEach(function (k) {
