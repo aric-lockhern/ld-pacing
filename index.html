@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Lockhern — Account Pacing</title>
 <style>
-:root{--bg:#F4F6F8;--surface:#FFFFFF;--ink:#17232E;--muted:#64717F;--faint:#93A0AD;--line:#E7EBEF;--line2:#EEF1F4;
---accent:#3A4FBF;--accent-bg:#EDEFFB;--good:#1B8A5A;--good-bg:#E7F4EE;--under:#B4791C;--under-bg:#FBF1DC;
+:root{--bg:#F3F6FB;--surface:#FFFFFF;--ink:#0E1220;--muted:#6B7A99;--faint:#9AA6BF;--line:#E7ECF4;--line2:#EFF3F9;
+--accent:#317AE0;--accent-bg:#E6F0FC;--brand-deep:#0E2970;--good:#1B8A5A;--good-bg:#E7F4EE;--under:#B4791C;--under-bg:#FBF1DC;
 --over:#C13B2E;--over-bg:#FBE9E6;--none:#AEB7C2;--editbg:#FFFDF3;--editline:#E4D9A8;}
 *{box-sizing:border-box;}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;}
@@ -33,9 +33,9 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 
 .banner{display:flex;align-items:center;gap:9px;border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:14px;line-height:1.4;}
 .banner.warn{background:var(--under-bg);border:1px solid #EAD9A8;color:#7A5A12;}
-.banner.plan{background:var(--accent-bg);border:1px solid #D9DEF6;color:#2A3670;}
+.banner.plan{background:var(--accent-bg);border:1px solid #C9E0F9;color:var(--brand-deep);}
 .banner button{border:1px solid #d9cf9e;background:#fff;border-radius:7px;padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;margin-left:auto;}
-.banner.plan button{border-color:#C7CEF0;color:var(--accent);}
+.banner.plan button{border-color:#BBD6F6;color:var(--accent);}
 
 .summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) minmax(0,1.6fr);gap:12px;margin-bottom:16px;}
 .stat{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:13px 15px;}
@@ -83,14 +83,14 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .rowmsg:hover{border-color:var(--accent);color:var(--accent);}
 .c-sel{display:flex;align-items:center;justify-content:center;}
 .c-sel input{width:15px;height:15px;cursor:pointer;accent-color:var(--accent);}
-.selbar{display:flex;align-items:center;gap:10px;background:var(--accent-bg);border:1px solid #D9DEF6;border-radius:10px;padding:9px 14px;margin-bottom:10px;}
-.selcount{font-size:13px;font-weight:600;color:#2A3670;margin-right:2px;}
+.selbar{display:flex;align-items:center;gap:10px;background:var(--accent-bg);border:1px solid #C9E0F9;border-radius:10px;padding:9px 14px;margin-bottom:10px;}
+.selcount{font-size:13px;font-weight:600;color:var(--brand-deep);margin-right:2px;}
 .btn.sm{padding:5px 10px;font-size:12px;}
 .tag.hiddentag{color:var(--faint);background:var(--line2);}
 .tag.disc{text-transform:capitalize;}
 .tag.disc.strict{color:var(--over);background:var(--over-bg);}
 .tag.disc.fluid{color:var(--muted);background:var(--line2);}
-.typeseg{display:inline-flex;background:#EEF1F4;border-radius:8px;padding:2px;gap:2px;}
+.typeseg{display:inline-flex;background:var(--line2);border-radius:8px;padding:2px;gap:2px;}
 .typeseg button{border:none;background:none;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;}
 .typeseg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(20,30,45,.12);}
 .mgr-wrap{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--muted);}
@@ -157,7 +157,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,Bl
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--ink);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:600;opacity:0;transition:opacity .25s,transform .25s;z-index:120;box-shadow:0 8px 24px rgba(20,30,45,.3);}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .topright{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
-.tabs{display:inline-flex;background:#EEF1F4;border-radius:9px;padding:3px;gap:2px;}
+.tabs{display:inline-flex;background:var(--line2);border-radius:9px;padding:3px;gap:2px;}
 .tab{border:none;background:none;padding:6px 14px;border-radius:7px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;}
 .tab.on{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(20,30,45,.1);}
 .filtertag{border:none;cursor:pointer;}
@@ -349,10 +349,17 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 <!-- Boot loader: shown immediately (before JS runs) so the page is never blank
      while the app initializes and the first data pull is in flight. Removed by
      hideBoot() once the initial load settles. Inline-styled on purpose. -->
-<div id="boot" style="position:fixed;inset:0;background:#F4F6F8;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity .35s ease;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  <div class="spin" style="width:38px;height:38px;border:3px solid #E7EBEF;border-top-color:#3A4FBF;border-radius:50%;margin-bottom:16px;"></div>
-  <div style="font-size:15px;font-weight:650;color:#17232E;letter-spacing:-.01em;">Lockhern — Account Pacing</div>
-  <div style="font-size:12.5px;color:#64717F;margin-top:5px;">Loading your accounts… this can take a moment.</div>
+<div id="boot" style="position:fixed;inset:0;background:#F3F6FB;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity .35s ease;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <svg width="151" height="40" viewBox="0 0 128 34" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lockhern Digital" style="margin-bottom:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <rect x="0" y="3" width="28" height="28" rx="7" fill="#317AE0"/>
+    <text x="14" y="22" text-anchor="middle" font-size="13" font-weight="800" fill="#FFFFFF" letter-spacing="-0.5">LD</text>
+    <line x1="38" y1="6" x2="38" y2="28" stroke="#BAC3D6" stroke-width="1"/>
+    <text x="47" y="16" font-size="12.5" font-weight="700" fill="#0E2970" letter-spacing="1.2">LOCKHERN</text>
+    <text x="47" y="28" font-size="8.5" font-weight="600" fill="#6B7A99" letter-spacing="4">DIGITAL</text>
+  </svg>
+  <div class="spin" style="width:34px;height:34px;border:3px solid #E7ECF4;border-top-color:#317AE0;border-radius:50%;margin-bottom:14px;"></div>
+  <div style="font-size:13px;font-weight:650;color:#0E2970;letter-spacing:-.01em;">Account Pacing</div>
+  <div style="font-size:12.5px;color:#6B7A99;margin-top:5px;">Loading your accounts… this can take a moment.</div>
 </div>
 <div class="wrap" id="app"></div>
 <div id="slow-note" hidden style="position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:9998;background:#1F2937;color:#fff;font:13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;padding:10px 15px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.28);max-width:92vw;text-align:center;"></div>
@@ -1170,7 +1177,13 @@ function topbarHTML(){
       + '<div class="mn-label">'+esc(monthLabel(state.viewMonth))+'<span class="mn-tag '+(isLive?'live':'plan')+'">'+(isLive?'Live':(state.viewMonth<state.liveKey?'Actuals':'Planning'))+'</span></div>'
       + '<button class="mn-arrow" data-act="next">›</button>'
       + (isLive?'':'<button class="mn-today" data-act="today">Today</button>')+'</div>');
-  var brand='<div class="brand"><span class="mark">Lockhern</span><span class="sep">/</span><span class="prod">Account Pacing</span>'+sourceChip()+'</div>';
+  var logo='<svg height="24" viewBox="0 0 128 34" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lockhern Digital" style="display:block;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">'
+    + '<rect x="0" y="3" width="28" height="28" rx="7" fill="#317AE0"/>'
+    + '<text x="14" y="22" text-anchor="middle" font-size="13" font-weight="800" fill="#FFFFFF" letter-spacing="-0.5">LD</text>'
+    + '<line x1="38" y1="6" x2="38" y2="28" stroke="#BAC3D6" stroke-width="1"/>'
+    + '<text x="47" y="16" font-size="12.5" font-weight="700" fill="#0E2970" letter-spacing="1.2">LOCKHERN</text>'
+    + '<text x="47" y="28" font-size="8.5" font-weight="600" fill="#6B7A99" letter-spacing="4">DIGITAL</text></svg>';
+  var brand='<div class="brand"><span class="mark" style="display:flex;align-items:center;">'+logo+'</span><span class="sep">/</span><span class="prod">Account Pacing</span>'+sourceChip()+'</div>';
   return '<div class="topbar"><div class="topcluster" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'+brand+channels+monthnav+'</div>'+settings+'</div>';
 }
 /* New-month reminder: nag to update this month's budgets until dismissed.
@@ -1926,8 +1939,8 @@ function chartSVG(o){
   var g='';
   for(var i=0;i<=4;i++){ var yv=yMax*i/4,py=Y(yv);
     g+='<line x1="'+padL+'" y1="'+py.toFixed(1)+'" x2="'+(w-padR)+'" y2="'+py.toFixed(1)+'" stroke="#EDF0F3"/>';
-    g+='<text x="'+(padL-6)+'" y="'+(py+3).toFixed(1)+'" text-anchor="end" font-size="9" fill="#93A0AD">'+o.yFmt(yv)+'</text>'; }
-  (o.xTicks||[]).forEach(function(t){ g+='<text x="'+X(t.x).toFixed(1)+'" y="'+(h-8)+'" text-anchor="middle" font-size="9" fill="#93A0AD">'+t.label+'</text>'; });
+    g+='<text x="'+(padL-6)+'" y="'+(py+3).toFixed(1)+'" text-anchor="end" font-size="9" fill="#9AA6BF">'+o.yFmt(yv)+'</text>'; }
+  (o.xTicks||[]).forEach(function(t){ g+='<text x="'+X(t.x).toFixed(1)+'" y="'+(h-8)+'" text-anchor="middle" font-size="9" fill="#9AA6BF">'+t.label+'</text>'; });
   if(o.bars && o.bars.pts.length){
     var n=o.bars.pts.length;
     var slot=(xMax===xMin)?iw:iw/(n>1?(n-1):1);
@@ -2015,16 +2028,16 @@ function detailHTML(a,d){
   var dailyChart=chartSVG({xMin:0,xMax:n-1,yMax:yDaily,yFmt:moneyY,xTicks:xTicks,
     bars:{pts:px('spend'),colorFor:function(p){ var r=rows[p[0]]; if(!r.target) return '#9AA6B4';
       return r.spend>r.target*1.15?'#C13B2E':(r.spend<r.target*0.85?'#D9A63C':'#4A5568'); }},
-    series:[{pts:px('target'),color:'#3A4FBF',dash:true}]});
+    series:[{pts:px('target'),color:'#317AE0',dash:true}]});
   var avgSpend=rows.reduce(function(s,r){return s+r.spend;},0)/n;
   var avgTarget=rows.reduce(function(s,r){return s+r.target;},0)/n;
 
   var cumChart=chartSVG({xMin:0,xMax:n-1,yMax:niceMax(Math.max(last.cum,last.expected,1)),yFmt:moneyY,xTicks:xTicks,
-    series:[{pts:px('cum'),color:'#4A5568'},{pts:px('expected'),color:'#3A4FBF',dash:true}]});
+    series:[{pts:px('cum'),color:'#4A5568'},{pts:px('expected'),color:'#317AE0',dash:true}]});
   var cpaChart=chartSVG({xMin:0,xMax:n-1,yMax:maxOf('cpa'),yFmt:moneyY,xTicks:xTicks,series:[{pts:pxf('cpa'),color:'#42506A'}]});
   // Conversions per day — reflects the client's picked action(s) + basis (or the
   // account's headline conversions when nothing is picked). Key view for lead-gen.
-  var convChart=chartSVG({xMin:0,xMax:n-1,yMax:maxOf('conv'),yFmt:function(v){return intf(v);},xTicks:xTicks,series:[{pts:px('conv'),color:'#4F46C9'}]});
+  var convChart=chartSVG({xMin:0,xMax:n-1,yMax:maxOf('conv'),yFmt:function(v){return intf(v);},xTicks:xTicks,series:[{pts:px('conv'),color:'#0E2970'}]});
   var totConv=rows.reduce(function(s,r){return s+(r.conv||0);},0);
   var convSel2=state.convPrefs[a.client]||[];
   var convNote = convSel2.length
@@ -2034,10 +2047,10 @@ function detailHTML(a,d){
   var charts=''
     + '<div class="chartcard"><div class="ch-title">Daily spend vs target</div>'+dailyChart
       + '<div class="legend"><span class="lg"><i style="background:#4A5568"></i>On target</span><span class="lg"><i style="background:#D9A63C"></i>Under</span>'
-      + '<span class="lg"><i style="background:#C13B2E"></i>Over</span><span class="lg"><i style="background:#3A4FBF"></i>Target/day</span></div>'
+      + '<span class="lg"><i style="background:#C13B2E"></i>Over</span><span class="lg"><i style="background:#317AE0"></i>Target/day</span></div>'
       + (avgTarget>0?('<div class="chnote">Avg '+money(avgSpend)+'/day vs '+money(avgTarget)+' target</div>'):'<div class="chnote">Set a budget to see the daily target</div>')
       + '</div>'
-    + '<div class="chartcard"><div class="ch-title">Cumulative spend — actual vs expected</div>'+cumChart+'<div class="legend"><span class="lg"><i style="background:#4A5568"></i>Actual</span><span class="lg"><i style="background:#3A4FBF"></i>Expected</span></div></div>'
+    + '<div class="chartcard"><div class="ch-title">Cumulative spend — actual vs expected</div>'+cumChart+'<div class="legend"><span class="lg"><i style="background:#4A5568"></i>Actual</span><span class="lg"><i style="background:#317AE0"></i>Expected</span></div></div>'
     + '<div class="chartcard"><div class="ch-title">Conversions (daily)</div>'+convChart+'<div class="chnote">'+intf(totConv)+' total · avg '+intf(n>0?totConv/n:0)+'/day · '+esc(convNote)+'</div></div>'
     + '<div class="chartcard"><div class="ch-title">Cost / conv (daily)</div>'+cpaChart+'</div>';
   if(hasRev){
