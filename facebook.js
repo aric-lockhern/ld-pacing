@@ -1004,17 +1004,17 @@ function fbChartsHTML(camp,d){
   var dailyChart=chartSVG({xMin:0,xMax:n-1,yMax:yDaily,yFmt:moneyY,xTicks:xTicks,
     bars:{pts:px('cost'),colorFor:function(p){ var r=rows[p[0]]; if(!r.target) return '#9AA6B4';
       return r.cost>r.target*1.15?'#C13B2E':(r.cost<r.target*0.85?'#D9A63C':'#4A5568'); }},
-    series:[{pts:px('target'),color:'#3A4FBF',dash:true}]});
+    series:[{pts:px('target'),color:'#317AE0',dash:true}]});
   var cumChart=chartSVG({xMin:0,xMax:n-1,yMax:niceMax(Math.max(last.cum,last.expected,1)),yFmt:moneyY,xTicks:xTicks,
-    series:[{pts:px('cum'),color:'#4A5568'},{pts:px('expected'),color:'#3A4FBF',dash:true}]});
+    series:[{pts:px('cum'),color:'#4A5568'},{pts:px('expected'),color:'#317AE0',dash:true}]});
 
   var charts='<div class="charts">'
     + '<div class="chartcard"><div class="ch-title">Daily spend vs target</div>'+dailyChart
       + '<div class="legend"><span class="lg"><i style="background:#4A5568"></i>On target</span><span class="lg"><i style="background:#D9A63C"></i>Under</span>'
-      + '<span class="lg"><i style="background:#C13B2E"></i>Over</span><span class="lg"><i style="background:#3A4FBF"></i>Target/day</span></div>'
+      + '<span class="lg"><i style="background:#C13B2E"></i>Over</span><span class="lg"><i style="background:#317AE0"></i>Target/day</span></div>'
       + (target>0?('<div class="chnote">Target '+money(target)+'/day</div>'):'<div class="chnote">Set a budget to see the daily target</div>')+'</div>'
     + '<div class="chartcard"><div class="ch-title">Cumulative spend — actual vs expected</div>'+cumChart
-      + '<div class="legend"><span class="lg"><i style="background:#4A5568"></i>Actual</span><span class="lg"><i style="background:#3A4FBF"></i>Expected</span></div></div>';
+      + '<div class="legend"><span class="lg"><i style="background:#4A5568"></i>Actual</span><span class="lg"><i style="background:#317AE0"></i>Expected</span></div></div>';
   if(hasRev){
     var roasChart=chartSVG({xMin:0,xMax:n-1,yMax:(function(){var v=rows.map(function(r){return r.roas;}).filter(function(x){return x!=null;});return niceMax(v.length?Math.max.apply(null,v):1);})(),yFmt:function(v){return v.toFixed(1)+'x';},xTicks:xTicks,series:[{pts:pxf('roas'),color:'#1B8A5A'}]});
     charts+='<div class="chartcard"><div class="ch-title">ROAS (daily)</div>'+roasChart+'</div>';
