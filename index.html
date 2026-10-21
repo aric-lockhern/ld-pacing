@@ -675,7 +675,6 @@ function toggleSort(key){
 function sortVal(a,key){
   if(key==='name') return a.client;
   var d=derive(a);
-  if(key==='trend'){ var p=projection(a,d); return p?p.pct:null; }
   return { mtd:d.mtd, forecast:d.forecast, budget:d.effBudget, pace:d.pace,
            variance:d.variance, conv:d.conv, cpa:d.cpa, roas:d.roas }[key];
 }
@@ -1358,7 +1357,7 @@ function render(){
         + th('Budget <span class="edithint">edit</span>','budget','c-budget')
         + th('Pace to budget','pace','c-pace')
         + th('Δ vs budget','variance','c-num')
-        + th('Forecast','trend','c-num')
+        + th('Forecast','forecast','c-num')
         + th('Conv.','conv','c-num')
         + th('CPA','cpa','c-num')
         + th('ROAS','roas','c-num')
